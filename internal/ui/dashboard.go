@@ -16,17 +16,19 @@ var (
 	normalStyle   = lipgloss.NewStyle()
 	staleStyle    = lipgloss.NewStyle().Faint(true)
 	hintStyle     = lipgloss.NewStyle().Faint(true)
+	wfStyle       = lipgloss.NewStyle().Faint(false)
+	jobIndent     = "          "
+	wfIndent      = "      "
 )
-
-type SelectRepoMsg int // index of selected repo
 
 type Dashboard struct {
 	snapshot state.Snapshot
 	cursor   int
+	expanded map[int]bool
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
-	return Dashboard{snapshot: snap}
+	return Dashboard{snapshot: snap, expanded: make(map[int]bool)}
 }
 
 func (d Dashboard) Init() tea.Cmd { return nil }
@@ -43,8 +45,11 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 			if d.cursor < len(d.snapshot.Repos)-1 {
 				d.cursor++
 			}
-		case "enter":
-			return d, func() tea.Msg { return SelectRepoMsg(d.cursor) }
+		case "enter", " ":
+			if d.expanded == nil {
+				d.expanded = make(map[int]bool)
+			}
+			d.expanded[d.cursor] = !d.expanded[d.cursor]
 		}
 	case state.Snapshot:
 		d.snapshot = msg
@@ -71,24 +76,59 @@ func (d Dashboard) View() string {
 	}
 
 	for i, r := range d.snapshot.Repos {
+		expanded := d.expanded[i]
+		triangle := "▶"
+		if expanded {
+			triangle = "▼"
+		}
+
 		row := repoRow(r)
 		if i == d.cursor {
-			out += selectedStyle.Render("▶ "+row) + "\n"
+			out += selectedStyle.Render(triangle+" "+row) + "\n"
 		} else {
 			out += normalStyle.Render("  "+row) + "\n"
 		}
+
+		if expanded {
+			out += renderTree(r)
+		}
 	}
 
-	out += "\n" + hintStyle.Render("↑/↓ navigate  enter detail  r refresh  o open  q quit  ? help")
+	out += "\n" + hintStyle.Render("↑/↓ navigate  enter/space expand  o open  r refresh  q quit  ? help")
+	return out
+}
+
+func renderTree(r state.RepoState) string {
+	out := ""
+	if r.Err != nil && len(r.Runs) == 0 {
+		out += jobRed.Render(wfIndent+"⚠ "+r.Err.Error()) + "\n"
+		return out
+	}
+	if len(r.Runs) == 0 {
+		out += staleStyle.Render(wfIndent+"no runs") + "\n"
+		return out
+	}
+	for _, run := range r.Runs {
+		status := run.Conclusion
+		if status == "" {
+			status = run.Status
+		}
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		for _, job := range run.Jobs {
+			jobStatus := job.Conclusion
+			if jobStatus == "" {
+				jobStatus = job.Status
+			}
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+		}
+	}
 	return out
 }
 
 func repoRow(r state.RepoState) string {
 	icon := r.Stoplight.String()
 	name := r.FullName()
-
 	summary := workflowSummary(r)
-
 	row := fmt.Sprintf("%s  %-40s %s", icon, name, summary)
 	if r.IsStale() {
 		age := time.Since(*r.StaleAt).Round(time.Second)
@@ -104,19 +144,16 @@ func workflowSummary(r state.RepoState) string {
 	if len(r.Runs) == 0 {
 		return "no runs"
 	}
-	// Find the most notable run to show.
 	for _, run := range r.Runs {
 		s := run.Conclusion
 		if s == "" {
 			s = run.Status
 		}
-		light := aggregator.RunStatus(s)
-		if aggregator.Aggregate([]aggregator.RunStatus{light}) == r.Stoplight {
-			label := s
-			if label == "" {
-				label = "unknown"
+		if aggregator.Aggregate([]aggregator.RunStatus{aggregator.RunStatus(s)}) == r.Stoplight {
+			if s == "" {
+				s = "unknown"
 			}
-			return fmt.Sprintf("%s · %s", run.WorkflowName, label)
+			return fmt.Sprintf("%s · %s", run.WorkflowName, s)
 		}
 	}
 	run := r.Runs[0]

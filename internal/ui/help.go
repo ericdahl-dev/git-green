@@ -15,14 +15,14 @@ type Help struct{}
 func (h Help) View() string {
 	return helpStyle.Render(`git-green keybindings
 
-  ↑ / k       move up
-  ↓ / j       move down
-  enter        open detail view
-  esc          back to dashboard
-  r            force refresh
-  o            open run in browser
-  ?            toggle this help
-  q / ctrl+c   quit`)
+  ↑ / k         move up
+  ↓ / j         move down
+  enter / space  expand/collapse repo
+  o              open run in browser
+  r              force refresh
+  ?              toggle this help
+  esc            close help
+  q / ctrl+c     quit`)
 }
 
 type ToggleHelpMsg struct{}

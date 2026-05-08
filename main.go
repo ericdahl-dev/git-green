@@ -15,17 +15,8 @@ import (
 	"github.com/ericdahl-dev/git-green/internal/ui"
 )
 
-type view int
-
-const (
-	viewDashboard view = iota
-	viewDetail
-)
-
 type model struct {
 	dashboard   ui.Dashboard
-	detail      ui.Detail
-	activeView  view
 	showHelp    bool
 	pollCh      <-chan state.Snapshot
 	pollCancel  context.CancelFunc
@@ -60,6 +51,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = !m.showHelp
 			return m, nil
+		case "esc":
+			m.showHelp = false
+			return m, nil
 		case "r":
 			m.poller.ForceRefresh(m.pollCtx, m.pollChWrite)
 			return m, nil
@@ -70,70 +64,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case state.Snapshot:
 		cmds = append(cmds, waitForSnapshot(m.pollCh))
-
-		var dashCmd, detailCmd tea.Cmd
+		var dashCmd tea.Cmd
 		m.dashboard, dashCmd = m.dashboard.Update(msg)
-		m.detail, detailCmd = m.detail.Update(msg)
-		cmds = append(cmds, dashCmd, detailCmd)
+		cmds = append(cmds, dashCmd)
 		return m, tea.Batch(cmds...)
-
-	case ui.SelectRepoMsg:
-		repo := m.dashboard.SelectedRepo()
-		if repo != nil {
-			m.detail = ui.NewDetail(*repo)
-			m.activeView = viewDetail
-		}
-		return m, nil
-
-	case ui.BackMsg:
-		m.activeView = viewDashboard
-		return m, nil
 	}
 
-	switch m.activeView {
-	case viewDashboard:
-		var cmd tea.Cmd
-		m.dashboard, cmd = m.dashboard.Update(msg)
-		cmds = append(cmds, cmd)
-	case viewDetail:
-		var cmd tea.Cmd
-		m.detail, cmd = m.detail.Update(msg)
-		cmds = append(cmds, cmd)
-	}
-
+	var cmd tea.Cmd
+	m.dashboard, cmd = m.dashboard.Update(msg)
+	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
 }
 
 func (m model) View() string {
-	var body string
-	switch m.activeView {
-	case viewDashboard:
-		body = m.dashboard.View()
-	case viewDetail:
-		body = m.detail.View()
-	}
 	if m.showHelp {
 		return ui.Help{}.View()
 	}
-	return body
+	return m.dashboard.View()
 }
 
 func (m *model) openInBrowser() {
-	var url string
-	switch m.activeView {
-	case viewDetail:
-		repo := m.detail.CurrentRepo()
-		if len(repo.Runs) > 0 {
-			url = repo.Runs[0].HTMLURL
-		}
-	case viewDashboard:
-		repo := m.dashboard.SelectedRepo()
-		if repo != nil && len(repo.Runs) > 0 {
-			url = repo.Runs[0].HTMLURL
-		}
-	}
-	if url != "" {
-		exec.Command("open", url).Start()
+	repo := m.dashboard.SelectedRepo()
+	if repo != nil && len(repo.Runs) > 0 {
+		exec.Command("open", repo.Runs[0].HTMLURL).Start()
 	}
 }
 
@@ -162,7 +115,6 @@ func main() {
 	writeCh := make(chan state.Snapshot, 4)
 	readCh, stopPoller := p.Start(ctx)
 
-	// merge poller output into writeCh for ForceRefresh support
 	go func() {
 		for snap := range readCh {
 			writeCh <- snap
@@ -172,7 +124,6 @@ func main() {
 
 	m := model{
 		dashboard:   ui.NewDashboard(state.Snapshot{}),
-		activeView:  viewDashboard,
 		pollCh:      writeCh,
 		pollCancel:  func() { cancel(); stopPoller() },
 		pollCtx:     ctx,
