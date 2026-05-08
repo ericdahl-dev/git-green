@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -61,12 +62,48 @@ func NewDashboard(snap state.Snapshot) Dashboard {
 	return d
 }
 
+// stoplightPriority returns sort order: yellow (active) first, then red, green, grey.
+func stoplightPriority(s aggregator.Stoplight) int {
+	switch s {
+	case aggregator.StoplightYellow:
+		return 0
+	case aggregator.StoplightRed:
+		return 1
+	case aggregator.StoplightGreen:
+		return 2
+	default:
+		return 3
+	}
+}
+
 func (d Dashboard) buildRows() []flatRow {
+	// Build sorted repo index order: yellow first, then red, green, grey.
+	repoOrder := make([]int, len(d.snapshot.Repos))
+	for i := range repoOrder {
+		repoOrder[i] = i
+	}
+	sort.SliceStable(repoOrder, func(a, b int) bool {
+		pa := stoplightPriority(d.snapshot.Repos[repoOrder[a]].Stoplight)
+		pb := stoplightPriority(d.snapshot.Repos[repoOrder[b]].Stoplight)
+		return pa < pb
+	})
+
 	var rows []flatRow
-	for i, r := range d.snapshot.Repos {
+	for _, i := range repoOrder {
+		r := d.snapshot.Repos[i]
 		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
 		if d.repoExp[i] {
-			for j := range r.PRs {
+			// Sort PRs: yellow first, then red, green, grey.
+			prOrder := make([]int, len(r.PRs))
+			for j := range prOrder {
+				prOrder[j] = j
+			}
+			sort.SliceStable(prOrder, func(a, b int) bool {
+				pa := stoplightPriority(r.PRs[prOrder[a]].Stoplight)
+				pb := stoplightPriority(r.PRs[prOrder[b]].Stoplight)
+				return pa < pb
+			})
+			for _, j := range prOrder {
 				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j})
 			}
 		}
