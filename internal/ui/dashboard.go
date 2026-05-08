@@ -180,50 +180,40 @@ func (d Dashboard) View() string {
 		out += staleStyle.Render("  No repos configured.") + "\n"
 	}
 
-	cursorRow := -1
-	if len(d.rows) > 0 {
-		cursorRow = d.cursor
-	}
+	for rowIdx, row := range d.rows {
+		selected := rowIdx == d.cursor && !d.selectionFade
+		r := d.snapshot.Repos[row.repoIdx]
 
-	rowIdx := 0
-	for i, r := range d.snapshot.Repos {
-		expanded := d.repoExp[i]
+		switch row.kind {
+		case kindRepo:
+			expanded := d.repoExp[row.repoIdx]
+			triangle := "▶"
+			if expanded {
+				triangle = "▼"
+			}
+			line := repoRow(r)
+			if selected {
+				out += selectedStyle.Render(triangle+" "+line) + "\n"
+			} else {
+				out += normalStyle.Render("  "+line) + "\n"
+			}
+			if expanded {
+				out += renderBranchSection(r)
+			}
 
-		// Repo row
-		triangle := "▶"
-		if expanded {
-			triangle = "▼"
-		}
-		repoLine := repoRow(r)
-		if rowIdx == cursorRow && !d.selectionFade {
-			out += selectedStyle.Render(triangle+" "+repoLine) + "\n"
-		} else {
-			out += normalStyle.Render("  "+repoLine) + "\n"
-		}
-		rowIdx++
-
-		if !expanded {
-			continue
-		}
-
-		// Default branch section
-		out += renderBranchSection(r)
-
-		// PR rows
-		for j, pr := range r.PRs {
-			prExpanded := d.prExp[[2]int{i, j}]
+		case kindPR:
+			pr := r.PRs[row.prIdx]
+			prExpanded := d.prExp[[2]int{row.repoIdx, row.prIdx}]
 			tri := "▶"
 			if prExpanded {
 				tri = "▼"
 			}
-			prLine := fmt.Sprintf("%s  PR #%d · %s", pr.Stoplight.String(), pr.Number, pr.Title)
-			if rowIdx == cursorRow && !d.selectionFade {
-				out += selectedStyle.Render(prIndent+tri+" "+prLine) + "\n"
+			line := fmt.Sprintf("%s  PR #%d · %s", pr.Stoplight.String(), pr.Number, pr.Title)
+			if selected {
+				out += selectedStyle.Render(prIndent+tri+" "+line) + "\n"
 			} else {
-				out += normalStyle.Render(prIndent+tri+" "+prLine) + "\n"
+				out += normalStyle.Render(prIndent+tri+" "+line) + "\n"
 			}
-			rowIdx++
-
 			if prExpanded {
 				out += renderPRRuns(pr)
 			}
