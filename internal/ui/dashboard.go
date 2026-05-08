@@ -21,21 +21,35 @@ var (
 	wfIndent      = "      "
 )
 
+const selectionTimeout = 10 * time.Second
+
+type selectionExpiredMsg struct{}
+
 type Dashboard struct {
-	snapshot state.Snapshot
-	cursor   int
-	expanded map[int]bool
+	snapshot      state.Snapshot
+	cursor        int
+	expanded      map[int]bool
+	lastActivity  time.Time
+	selectionFade bool
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
-	return Dashboard{snapshot: snap, expanded: make(map[int]bool)}
+	return Dashboard{snapshot: snap, expanded: make(map[int]bool), lastActivity: time.Now()}
 }
 
-func (d Dashboard) Init() tea.Cmd { return nil }
+func selectionTimeoutCmd() tea.Cmd {
+	return tea.Tick(selectionTimeout, func(time.Time) tea.Msg {
+		return selectionExpiredMsg{}
+	})
+}
+
+func (d Dashboard) Init() tea.Cmd { return selectionTimeoutCmd() }
 
 func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		d.lastActivity = time.Now()
+		d.selectionFade = false
 		switch msg.String() {
 		case "up", "k":
 			if d.cursor > 0 {
@@ -50,6 +64,11 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 				d.expanded = make(map[int]bool)
 			}
 			d.expanded[d.cursor] = !d.expanded[d.cursor]
+		}
+		return d, selectionTimeoutCmd()
+	case selectionExpiredMsg:
+		if time.Since(d.lastActivity) >= selectionTimeout {
+			d.selectionFade = true
 		}
 	case state.Snapshot:
 		d.snapshot = msg
@@ -83,7 +102,7 @@ func (d Dashboard) View() string {
 		}
 
 		row := repoRow(r)
-		if i == d.cursor {
+		if i == d.cursor && !d.selectionFade {
 			out += selectedStyle.Render(triangle+" "+row) + "\n"
 		} else {
 			out += normalStyle.Render("  "+row) + "\n"
