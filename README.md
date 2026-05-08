@@ -1,7 +1,5 @@
 # git-green
 
-### git your branches green
-
 A terminal dashboard for live GitHub CI health across multiple repos — no browser required.
 
 ![git-green dashboard](docs/screenshot.svg)
@@ -39,6 +37,30 @@ owner = "your-org"
 name = "your-repo"
 # branch = "main"          # optional; defaults to repo default branch
 # workflows = ["CI"]       # optional; defaults to all workflows
+```
+
+### Personal accounts and orgs without a token
+
+Any `owner` that doesn't match a `[[orgs]]` entry automatically falls back to `gh auth token` — the account you're logged in as via `gh auth login`. This means you can monitor repos under your personal username or any other org you have access to without any extra config:
+
+```toml
+# Already logged in as Skeyelab via `gh auth login`?
+# No [[orgs]] entry needed — just add the repo:
+[[repos]]
+owner = "Skeyelab"
+name = "your-repo"
+```
+
+If you need an explicit token for a specific account (e.g. a separate org), add an `[[orgs]]` entry:
+
+```toml
+[[orgs]]
+name = "some-other-org"
+token_env = "SOME_ORG_TOKEN"   # or token = "ghp_xxx"
+
+[[repos]]
+owner = "some-other-org"
+name = "your-repo"
 ```
 
 ## Keybindings
