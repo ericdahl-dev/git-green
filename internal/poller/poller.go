@@ -13,8 +13,7 @@ import (
 
 // Fetcher is the interface the Poller uses to fetch runs — allows test substitution.
 type Fetcher interface {
-	FetchRuns(ctx context.Context, q githubclient.RepoQuery) ([]githubclient.WorkflowRun, error)
-	FetchPRRuns(ctx context.Context, q githubclient.RepoQuery) ([]githubclient.PRRun, error)
+	FetchAll(ctx context.Context, q githubclient.RepoQuery) (githubclient.RepoData, error)
 }
 
 // ClientFactory creates a Fetcher for a given token.
@@ -134,7 +133,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		Workflows: repo.Workflows,
 	}
 
-	runs, err := client.FetchRuns(ctx, q)
+	data, err := client.FetchAll(ctx, q)
 	if err != nil {
 		now := time.Now()
 		return state.RepoState{
@@ -142,27 +141,15 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 			Name:      repo.Name,
 			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
-			Runs:      runs,
+			Runs:      prev.Runs,
 			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
 		}
 	}
 
-	prRuns, err := client.FetchPRRuns(ctx, q)
-	if err != nil {
-		now := time.Now()
-		return state.RepoState{
-			Owner:     repo.Owner,
-			Name:      repo.Name,
-			Branch:    repo.Branch,
-			Stoplight: prev.Stoplight,
-			Runs:      runs,
-			PRs:       prev.PRs,
-			StaleAt:   &now,
-			Err:       err,
-		}
-	}
+	runs := data.BranchRuns
+	prRuns := data.PRRuns
 
 	// Aggregate stoplight from default-branch runs.
 	statuses := make([]aggregator.RunStatus, 0, len(runs))

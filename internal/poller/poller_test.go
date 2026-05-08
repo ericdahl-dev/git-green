@@ -20,12 +20,8 @@ type stubFetcher struct {
 	err    error
 }
 
-func (s *stubFetcher) FetchRuns(_ context.Context, _ githubclient.RepoQuery) ([]githubclient.WorkflowRun, error) {
-	return s.runs, s.err
-}
-
-func (s *stubFetcher) FetchPRRuns(_ context.Context, _ githubclient.RepoQuery) ([]githubclient.PRRun, error) {
-	return s.prRuns, s.err
+func (s *stubFetcher) FetchAll(_ context.Context, _ githubclient.RepoQuery) (githubclient.RepoData, error) {
+	return githubclient.RepoData{BranchRuns: s.runs, PRRuns: s.prRuns}, s.err
 }
 
 func stubFactory(runs []githubclient.WorkflowRun, err error) ClientFactory {
