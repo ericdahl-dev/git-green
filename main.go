@@ -123,7 +123,7 @@ func main() {
 	}()
 
 	m := model{
-		dashboard:   ui.NewDashboard(state.Snapshot{}),
+		dashboard:   ui.NewDashboard(p.Snapshot()),
 		pollCh:      writeCh,
 		pollCancel:  func() { cancel(); stopPoller() },
 		pollCtx:     ctx,

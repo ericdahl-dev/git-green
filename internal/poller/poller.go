@@ -41,6 +41,13 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 	return &Poller{cfg: cfg, factory: factory, current: repos}
 }
 
+// Snapshot returns an immutable view of the current (possibly initial) state.
+func (p *Poller) Snapshot() state.Snapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return state.New(p.current)
+}
+
 // Start begins polling on the configured interval, sending Snapshots to the returned channel.
 // Call the returned cancel func to stop.
 func (p *Poller) Start(ctx context.Context) (<-chan state.Snapshot, context.CancelFunc) {
