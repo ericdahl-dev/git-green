@@ -39,6 +39,29 @@ name = "your-repo"
 # workflows = ["CI"]       # optional; defaults to all workflows
 ```
 
+### Personal accounts and orgs without a token
+
+Any `owner` that doesn't match a `[[orgs]]` entry automatically falls back to `gh auth token` — the account you're logged in as via `gh auth login`. No extra config needed:
+
+```toml
+# Logged in as Skeyelab via `gh auth login`? Just add the repo:
+[[repos]]
+owner = "Skeyelab"
+name = "your-repo"
+```
+
+To use an explicit token for a specific account, add an `[[orgs]]` entry:
+
+```toml
+[[orgs]]
+name = "some-other-org"
+token_env = "SOME_ORG_TOKEN"   # or token = "ghp_xxx"
+
+[[repos]]
+owner = "some-other-org"
+name = "your-repo"
+```
+
 ## Keybindings
 
 | Key | Action |
