@@ -1,5 +1,7 @@
 # git-green
 
+### git your branches green
+
 A terminal dashboard for live GitHub CI health across multiple repos — no browser required.
 
 ![git-green dashboard](docs/screenshot.svg)
