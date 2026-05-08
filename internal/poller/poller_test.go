@@ -43,6 +43,10 @@ func writeConfig(t *testing.T, content string) *config.Config {
 
 func TestFetchUpdatesStoplight(t *testing.T) {
 	cfg := writeConfig(t, `
+[[orgs]]
+name = "ericdahl-dev"
+token = "test-token"
+
 [[repos]]
 owner = "ericdahl-dev"
 name = "git-green"
@@ -65,6 +69,10 @@ name = "git-green"
 
 func TestFetchErrorRetainsLastKnownStatus(t *testing.T) {
 	cfg := writeConfig(t, `
+[[orgs]]
+name = "ericdahl-dev"
+token = "test-token"
+
 [[repos]]
 owner = "ericdahl-dev"
 name = "git-green"
@@ -116,6 +124,10 @@ name = "git-green"
 
 func TestFetchClearsStaleOnSuccess(t *testing.T) {
 	cfg := writeConfig(t, `
+[[orgs]]
+name = "ericdahl-dev"
+token = "test-token"
+
 [[repos]]
 owner = "ericdahl-dev"
 name = "git-green"
