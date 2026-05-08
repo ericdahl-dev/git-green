@@ -21,7 +21,7 @@ A terminal dashboard (TUI) that displays live GitHub CI status for a user-config
 5. As a developer, I want a green stoplight when all workflows succeed, so that I can confidently move on.
 6. As a developer, I want a grey stoplight when a run is cancelled or no runs exist yet, so that the dashboard doesn't misrepresent ambiguous states as failures.
 7. As a developer, I want to navigate repos with arrow keys and select one with enter, so that I can explore details without touching the mouse.
-8. As a developer, I want a detail view showing each workflow's jobs and their statuses for the latest run, so that I can identify which job is failing without opening the browser.
+8. As a developer, I want to expand a repo row inline to see its branch CI and each open PR with its own stoplight, so that I can assess the full state without leaving the dashboard.
 9. As a developer, I want to press `o` to open the current run in the browser, so that I can read full logs when needed.
 10. As a developer, I want to press `r` to force an immediate refresh, so that I can get up-to-date status after a push without waiting for the poll interval.
 11. As a developer, I want to press `?` to see a help overlay of keybindings, so that I can discover functionality without reading docs.
@@ -52,11 +52,9 @@ A terminal dashboard (TUI) that displays live GitHub CI status for a user-config
 
 - **State / Model** — Immutable snapshot of all Repo statuses (Stoplight, latest Run, Jobs, staleness). The Poller produces a new State on every poll tick; the UI renders from the current State.
 
-- **Dashboard view** — Bubble Tea component. Renders one row per Repo: stoplight color, owner/name, workflow summary, elapsed time. Handles `↑`/`↓` navigation and `enter` to select.
+- **Dashboard view** — Bubble Tea component. Renders an expandable two-level tree: Repo rows (with Stoplight, name, summary) and PR rows (with per-PR Stoplight and title). Handles `↑`/`↓` navigation and `enter`/`space` to expand/collapse. Repos and PRs are sorted active-first (🟡→🔴→🟢→⚪). When a Repo is expanded, shows branch CI above PR rows.
 
-- **Detail view** — Bubble Tea component. Renders all Workflows for the selected Repo, with each Workflow's latest Run's Jobs and statuses. Handles `esc`/`backspace` to return to Dashboard.
-
-- **Root app** — Bubble Tea root model. Owns the poll ticker, routes between Dashboard and Detail views, handles global keybindings (`r`, `o`, `q`, `?`).
+- **Root app** — Bubble Tea root model. Owns the poll ticker and handles global keybindings (`r`, `o`, `q`, `?`).
 
 ### Key architectural decisions
 
@@ -104,7 +102,6 @@ name = "git-green"
 - Notification/alerting (sound, desktop notifications, webhook emission)
 - Triggering or re-running CI jobs from within the TUI
 - Viewing raw log output (step-level streaming) — browser is the escape hatch via `o`
-- PR-level CI status (only default/configured branch)
 - GitHub Actions secrets or environment management
 - Non-GitHub CI systems (CircleCI, Jenkins, etc.)
 - Multi-user / shared config
