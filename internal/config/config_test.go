@@ -161,7 +161,7 @@ name = "git-green"
 }
 
 func TestTokenEnvMissing(t *testing.T) {
-	os.Unsetenv("MISSING_TOKEN_ENV")
+	_ = os.Unsetenv("MISSING_TOKEN_ENV")
 	path := writeTempConfig(t, `
 [[orgs]]
 name = "ericdahl-dev"

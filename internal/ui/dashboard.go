@@ -17,8 +17,9 @@ var (
 	staleStyle    = lipgloss.NewStyle().Faint(true)
 	hintStyle     = lipgloss.NewStyle().Faint(true)
 	wfStyle       = lipgloss.NewStyle().Faint(false)
-	jobIndent     = "          "
-	wfIndent      = "      "
+	prIndent      = "      "
+	wfIndent      = "          "
+	jobIndent     = "              "
 )
 
 const selectionTimeout = 10 * time.Second
@@ -119,12 +120,34 @@ func (d Dashboard) View() string {
 
 func renderTree(r state.RepoState) string {
 	out := ""
-	if r.Err != nil && len(r.Runs) == 0 {
-		out += jobRed.Render(wfIndent+"⚠ "+r.Err.Error()) + "\n"
+	if r.Err != nil && len(r.Runs) == 0 && len(r.PRs) == 0 {
+		out += jobRed.Render(prIndent+"⚠ "+r.Err.Error()) + "\n"
 		return out
 	}
+
+	if len(r.PRs) > 0 {
+		for _, pr := range r.PRs {
+			out += wfStyle.Render(fmt.Sprintf("%s%s  PR #%d · %s", prIndent, pr.Stoplight.String(), pr.Number, pr.Title)) + "\n"
+			for _, run := range pr.Runs {
+				status := run.Conclusion
+				if status == "" {
+					status = run.Status
+				}
+				out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+				for _, job := range run.Jobs {
+					jobStatus := job.Conclusion
+					if jobStatus == "" {
+						jobStatus = job.Status
+					}
+					out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+				}
+			}
+		}
+		return out
+	}
+
 	if len(r.Runs) == 0 {
-		out += staleStyle.Render(wfIndent+"no runs") + "\n"
+		out += staleStyle.Render(prIndent+"no runs") + "\n"
 		return out
 	}
 	for _, run := range r.Runs {
@@ -132,13 +155,13 @@ func renderTree(r state.RepoState) string {
 		if status == "" {
 			status = run.Status
 		}
-		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", prIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
 		for _, job := range run.Jobs {
 			jobStatus := job.Conclusion
 			if jobStatus == "" {
 				jobStatus = job.Status
 			}
-			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+			out += fmt.Sprintf("%s%s  %s\n", wfIndent, jobStatusIcon(jobStatus), job.Name)
 		}
 	}
 	return out
@@ -157,8 +180,15 @@ func repoRow(r state.RepoState) string {
 }
 
 func workflowSummary(r state.RepoState) string {
-	if r.Err != nil && len(r.Runs) == 0 {
+	if r.Err != nil && len(r.Runs) == 0 && len(r.PRs) == 0 {
 		return "error"
+	}
+	if len(r.PRs) > 0 {
+		open := len(r.PRs)
+		if open == 1 {
+			return "1 PR open"
+		}
+		return fmt.Sprintf("%d PRs open", open)
 	}
 	if len(r.Runs) == 0 {
 		return "no runs"

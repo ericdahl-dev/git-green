@@ -86,7 +86,7 @@ func (m model) View() string {
 func (m *model) openInBrowser() {
 	repo := m.dashboard.SelectedRepo()
 	if repo != nil && len(repo.Runs) > 0 {
-		exec.Command("open", repo.Runs[0].HTMLURL).Start()
+		_ = exec.Command("open", repo.Runs[0].HTMLURL).Start()
 	}
 }
 

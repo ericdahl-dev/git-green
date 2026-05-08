@@ -7,12 +7,22 @@ import (
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 )
 
+// PRState holds CI state for a single open pull request.
+type PRState struct {
+	Number    int
+	Title     string
+	HTMLURL   string
+	Stoplight aggregator.Stoplight
+	Runs      []githubclient.WorkflowRun
+}
+
 // RepoState holds the current display state for a single Repo.
 type RepoState struct {
 	Owner     string
 	Name      string
 	Stoplight aggregator.Stoplight
 	Runs      []githubclient.WorkflowRun
+	PRs       []PRState
 	StaleAt   *time.Time // non-nil when last fetch failed
 	Err       error      // last error, if any
 }
