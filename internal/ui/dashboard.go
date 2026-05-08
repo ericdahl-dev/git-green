@@ -17,6 +17,7 @@ var (
 	staleStyle    = lipgloss.NewStyle().Faint(true)
 	hintStyle     = lipgloss.NewStyle().Faint(true)
 	wfStyle       = lipgloss.NewStyle().Faint(false)
+	branchIndent  = "      "
 	prIndent      = "      "
 	wfIndent      = "          "
 	jobIndent     = "              "
@@ -26,16 +27,51 @@ const selectionTimeout = 10 * time.Second
 
 type selectionExpiredMsg struct{}
 
+type rowKind int
+
+const (
+	kindRepo rowKind = iota
+	kindPR
+)
+
+type flatRow struct {
+	kind    rowKind
+	repoIdx int
+	prIdx   int // only for kindPR
+}
+
 type Dashboard struct {
 	snapshot      state.Snapshot
+	rows          []flatRow
 	cursor        int
-	expanded      map[int]bool
+	repoExp       map[int]bool
+	prExp         map[[2]int]bool
 	lastActivity  time.Time
 	selectionFade bool
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
-	return Dashboard{snapshot: snap, expanded: make(map[int]bool), lastActivity: time.Now()}
+	d := Dashboard{
+		snapshot:     snap,
+		repoExp:      make(map[int]bool),
+		prExp:        make(map[[2]int]bool),
+		lastActivity: time.Now(),
+	}
+	d.rows = d.buildRows()
+	return d
+}
+
+func (d Dashboard) buildRows() []flatRow {
+	var rows []flatRow
+	for i, r := range d.snapshot.Repos {
+		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
+		if d.repoExp[i] {
+			for j := range r.PRs {
+				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j})
+			}
+		}
+	}
+	return rows
 }
 
 func selectionTimeoutCmd() tea.Cmd {
@@ -57,14 +93,25 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 				d.cursor--
 			}
 		case "down", "j":
-			if d.cursor < len(d.snapshot.Repos)-1 {
+			if d.cursor < len(d.rows)-1 {
 				d.cursor++
 			}
 		case "enter", " ":
-			if d.expanded == nil {
-				d.expanded = make(map[int]bool)
+			if len(d.rows) == 0 {
+				break
 			}
-			d.expanded[d.cursor] = !d.expanded[d.cursor]
+			row := d.rows[d.cursor]
+			switch row.kind {
+			case kindRepo:
+				d.repoExp[row.repoIdx] = !d.repoExp[row.repoIdx]
+				d.rows = d.buildRows()
+				if d.cursor >= len(d.rows) {
+					d.cursor = len(d.rows) - 1
+				}
+			case kindPR:
+				key := [2]int{row.repoIdx, row.prIdx}
+				d.prExp[key] = !d.prExp[key]
+			}
 		}
 		return d, selectionTimeoutCmd()
 	case selectionExpiredMsg:
@@ -73,18 +120,19 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 		}
 	case state.Snapshot:
 		d.snapshot = msg
-		if d.cursor >= len(d.snapshot.Repos) && len(d.snapshot.Repos) > 0 {
-			d.cursor = len(d.snapshot.Repos) - 1
+		d.rows = d.buildRows()
+		if d.cursor >= len(d.rows) && len(d.rows) > 0 {
+			d.cursor = len(d.rows) - 1
 		}
 	}
 	return d, nil
 }
 
 func (d Dashboard) SelectedRepo() *state.RepoState {
-	if len(d.snapshot.Repos) == 0 {
+	if len(d.rows) == 0 {
 		return nil
 	}
-	r := d.snapshot.Repos[d.cursor]
+	r := d.snapshot.Repos[d.rows[d.cursor].repoIdx]
 	return &r
 }
 
@@ -95,22 +143,53 @@ func (d Dashboard) View() string {
 		out += staleStyle.Render("  No repos configured.") + "\n"
 	}
 
+	cursorRow := -1
+	if len(d.rows) > 0 {
+		cursorRow = d.cursor
+	}
+
+	rowIdx := 0
 	for i, r := range d.snapshot.Repos {
-		expanded := d.expanded[i]
+		expanded := d.repoExp[i]
+
+		// Repo row
 		triangle := "▶"
 		if expanded {
 			triangle = "▼"
 		}
-
-		row := repoRow(r)
-		if i == d.cursor && !d.selectionFade {
-			out += selectedStyle.Render(triangle+" "+row) + "\n"
+		repoLine := repoRow(r)
+		if rowIdx == cursorRow && !d.selectionFade {
+			out += selectedStyle.Render(triangle+" "+repoLine) + "\n"
 		} else {
-			out += normalStyle.Render("  "+row) + "\n"
+			out += normalStyle.Render("  "+repoLine) + "\n"
+		}
+		rowIdx++
+
+		if !expanded {
+			continue
 		}
 
-		if expanded {
-			out += renderTree(r)
+		// Default branch section
+		out += renderBranchSection(r)
+
+		// PR rows
+		for j, pr := range r.PRs {
+			prExpanded := d.prExp[[2]int{i, j}]
+			tri := "▶"
+			if prExpanded {
+				tri = "▼"
+			}
+			prLine := fmt.Sprintf("%s  PR #%d · %s", pr.Stoplight.String(), pr.Number, pr.Title)
+			if rowIdx == cursorRow && !d.selectionFade {
+				out += selectedStyle.Render(prIndent+tri+" "+prLine) + "\n"
+			} else {
+				out += normalStyle.Render(prIndent+tri+" "+prLine) + "\n"
+			}
+			rowIdx++
+
+			if prExpanded {
+				out += renderPRRuns(pr)
+			}
 		}
 	}
 
@@ -118,50 +197,49 @@ func (d Dashboard) View() string {
 	return out
 }
 
-func renderTree(r state.RepoState) string {
-	out := ""
-	if r.Err != nil && len(r.Runs) == 0 && len(r.PRs) == 0 {
-		out += jobRed.Render(prIndent+"⚠ "+r.Err.Error()) + "\n"
-		return out
+func renderBranchSection(r state.RepoState) string {
+	if r.Err != nil && len(r.Runs) == 0 {
+		return jobRed.Render(branchIndent+"⚠ "+r.Err.Error()) + "\n"
 	}
-
-	if len(r.PRs) > 0 {
-		for _, pr := range r.PRs {
-			out += wfStyle.Render(fmt.Sprintf("%s%s  PR #%d · %s", prIndent, pr.Stoplight.String(), pr.Number, pr.Title)) + "\n"
-			for _, run := range pr.Runs {
-				status := run.Conclusion
-				if status == "" {
-					status = run.Status
-				}
-				out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
-				for _, job := range run.Jobs {
-					jobStatus := job.Conclusion
-					if jobStatus == "" {
-						jobStatus = job.Status
-					}
-					out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
-				}
-			}
-		}
-		return out
-	}
-
 	if len(r.Runs) == 0 {
-		out += staleStyle.Render(prIndent+"no runs") + "\n"
-		return out
+		return staleStyle.Render(branchIndent+"no branch runs") + "\n"
 	}
+	branch := r.BranchName()
+	out := staleStyle.Render(branchIndent+"branch: "+branch) + "\n"
 	for _, run := range r.Runs {
 		status := run.Conclusion
 		if status == "" {
 			status = run.Status
 		}
-		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", prIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
 		for _, job := range run.Jobs {
 			jobStatus := job.Conclusion
 			if jobStatus == "" {
 				jobStatus = job.Status
 			}
-			out += fmt.Sprintf("%s%s  %s\n", wfIndent, jobStatusIcon(jobStatus), job.Name)
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+		}
+	}
+	return out
+}
+
+func renderPRRuns(pr state.PRState) string {
+	if len(pr.Runs) == 0 {
+		return staleStyle.Render(wfIndent+"no runs") + "\n"
+	}
+	out := ""
+	for _, run := range pr.Runs {
+		status := run.Conclusion
+		if status == "" {
+			status = run.Status
+		}
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		for _, job := range run.Jobs {
+			jobStatus := job.Conclusion
+			if jobStatus == "" {
+				jobStatus = job.Status
+			}
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
 		}
 	}
 	return out

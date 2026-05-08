@@ -20,6 +20,7 @@ type PRState struct {
 type RepoState struct {
 	Owner     string
 	Name      string
+	Branch    string
 	Stoplight aggregator.Stoplight
 	Runs      []githubclient.WorkflowRun
 	PRs       []PRState
@@ -29,6 +30,13 @@ type RepoState struct {
 
 func (r RepoState) FullName() string {
 	return r.Owner + "/" + r.Name
+}
+
+func (r RepoState) BranchName() string {
+	if r.Branch != "" {
+		return r.Branch
+	}
+	return "default"
 }
 
 func (r RepoState) IsStale() bool {

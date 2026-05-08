@@ -35,6 +35,7 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		repos[i] = state.RepoState{
 			Owner:     r.Owner,
 			Name:      r.Name,
+			Branch:    r.Branch,
 			Stoplight: aggregator.StoplightGrey,
 		}
 	}
@@ -116,6 +117,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
+			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
 			Runs:      prev.Runs,
 			PRs:       prev.PRs,
@@ -138,8 +140,9 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
+			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
-			Runs:      prev.Runs,
+			Runs:      runs,
 			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
@@ -152,6 +155,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
+			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
 			Runs:      runs,
 			PRs:       prev.PRs,
@@ -193,6 +197,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	return state.RepoState{
 		Owner:     repo.Owner,
 		Name:      repo.Name,
+		Branch:    repo.Branch,
 		Stoplight: aggregator.Aggregate(statuses),
 		Runs:      runs,
 		PRs:       prStates,
