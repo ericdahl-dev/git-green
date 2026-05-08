@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,24 +18,97 @@ var (
 	staleStyle    = lipgloss.NewStyle().Faint(true)
 	hintStyle     = lipgloss.NewStyle().Faint(true)
 	wfStyle       = lipgloss.NewStyle().Faint(false)
-	jobIndent     = "          "
-	wfIndent      = "      "
+	branchIndent  = "      "
+	prIndent      = "      "
+	wfIndent      = "          "
+	jobIndent     = "              "
 )
 
 const selectionTimeout = 10 * time.Second
 
 type selectionExpiredMsg struct{}
 
+type rowKind int
+
+const (
+	kindRepo rowKind = iota
+	kindPR
+)
+
+type flatRow struct {
+	kind    rowKind
+	repoIdx int
+	prIdx   int // only for kindPR
+}
+
 type Dashboard struct {
 	snapshot      state.Snapshot
+	rows          []flatRow
 	cursor        int
-	expanded      map[int]bool
+	repoExp       map[int]bool
+	prExp         map[[2]int]bool
 	lastActivity  time.Time
 	selectionFade bool
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
-	return Dashboard{snapshot: snap, expanded: make(map[int]bool), lastActivity: time.Now()}
+	d := Dashboard{
+		snapshot:     snap,
+		repoExp:      make(map[int]bool),
+		prExp:        make(map[[2]int]bool),
+		lastActivity: time.Now(),
+	}
+	d.rows = d.buildRows()
+	return d
+}
+
+// stoplightPriority returns sort order: yellow (active) first, then red, green, grey.
+func stoplightPriority(s aggregator.Stoplight) int {
+	switch s {
+	case aggregator.StoplightYellow:
+		return 0
+	case aggregator.StoplightRed:
+		return 1
+	case aggregator.StoplightGreen:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (d Dashboard) buildRows() []flatRow {
+	// Build sorted repo index order: yellow first, then red, green, grey.
+	repoOrder := make([]int, len(d.snapshot.Repos))
+	for i := range repoOrder {
+		repoOrder[i] = i
+	}
+	sort.SliceStable(repoOrder, func(a, b int) bool {
+		pa := stoplightPriority(d.snapshot.Repos[repoOrder[a]].Stoplight)
+		pb := stoplightPriority(d.snapshot.Repos[repoOrder[b]].Stoplight)
+		return pa < pb
+	})
+
+	var rows []flatRow
+	for _, i := range repoOrder {
+		r := d.snapshot.Repos[i]
+		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
+		if d.repoExp[i] {
+			// Sort PRs: yellow first, then red, green, grey.
+			prOrder := make([]int, len(r.PRs))
+			for j := range prOrder {
+				prOrder[j] = j
+			}
+			sort.SliceStable(prOrder, func(a, b int) bool {
+				pa := stoplightPriority(r.PRs[prOrder[a]].Stoplight)
+				pb := stoplightPriority(r.PRs[prOrder[b]].Stoplight)
+				return pa < pb
+			})
+			for _, j := range prOrder {
+				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j})
+			}
+		}
+	}
+	return rows
 }
 
 func selectionTimeoutCmd() tea.Cmd {
@@ -56,14 +130,25 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 				d.cursor--
 			}
 		case "down", "j":
-			if d.cursor < len(d.snapshot.Repos)-1 {
+			if d.cursor < len(d.rows)-1 {
 				d.cursor++
 			}
 		case "enter", " ":
-			if d.expanded == nil {
-				d.expanded = make(map[int]bool)
+			if len(d.rows) == 0 {
+				break
 			}
-			d.expanded[d.cursor] = !d.expanded[d.cursor]
+			row := d.rows[d.cursor]
+			switch row.kind {
+			case kindRepo:
+				d.repoExp[row.repoIdx] = !d.repoExp[row.repoIdx]
+				d.rows = d.buildRows()
+				if d.cursor >= len(d.rows) {
+					d.cursor = len(d.rows) - 1
+				}
+			case kindPR:
+				key := [2]int{row.repoIdx, row.prIdx}
+				d.prExp[key] = !d.prExp[key]
+			}
 		}
 		return d, selectionTimeoutCmd()
 	case selectionExpiredMsg:
@@ -72,18 +157,19 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 		}
 	case state.Snapshot:
 		d.snapshot = msg
-		if d.cursor >= len(d.snapshot.Repos) && len(d.snapshot.Repos) > 0 {
-			d.cursor = len(d.snapshot.Repos) - 1
+		d.rows = d.buildRows()
+		if d.cursor >= len(d.rows) && len(d.rows) > 0 {
+			d.cursor = len(d.rows) - 1
 		}
 	}
 	return d, nil
 }
 
 func (d Dashboard) SelectedRepo() *state.RepoState {
-	if len(d.snapshot.Repos) == 0 {
+	if len(d.rows) == 0 {
 		return nil
 	}
-	r := d.snapshot.Repos[d.cursor]
+	r := d.snapshot.Repos[d.rows[d.cursor].repoIdx]
 	return &r
 }
 
@@ -94,22 +180,43 @@ func (d Dashboard) View() string {
 		out += staleStyle.Render("  No repos configured.") + "\n"
 	}
 
-	for i, r := range d.snapshot.Repos {
-		expanded := d.expanded[i]
-		triangle := "▶"
-		if expanded {
-			triangle = "▼"
-		}
+	for rowIdx, row := range d.rows {
+		selected := rowIdx == d.cursor && !d.selectionFade
+		r := d.snapshot.Repos[row.repoIdx]
 
-		row := repoRow(r)
-		if i == d.cursor && !d.selectionFade {
-			out += selectedStyle.Render(triangle+" "+row) + "\n"
-		} else {
-			out += normalStyle.Render("  "+row) + "\n"
-		}
+		switch row.kind {
+		case kindRepo:
+			expanded := d.repoExp[row.repoIdx]
+			triangle := "▶"
+			if expanded {
+				triangle = "▼"
+			}
+			line := repoRow(r)
+			if selected {
+				out += selectedStyle.Render(triangle+" "+line) + "\n"
+			} else {
+				out += normalStyle.Render("  "+line) + "\n"
+			}
+			if expanded {
+				out += renderBranchSection(r)
+			}
 
-		if expanded {
-			out += renderTree(r)
+		case kindPR:
+			pr := r.PRs[row.prIdx]
+			prExpanded := d.prExp[[2]int{row.repoIdx, row.prIdx}]
+			tri := "▶"
+			if prExpanded {
+				tri = "▼"
+			}
+			line := fmt.Sprintf("%s  PR #%d · %s", pr.Stoplight.String(), pr.Number, pr.Title)
+			if selected {
+				out += selectedStyle.Render(prIndent+tri+" "+line) + "\n"
+			} else {
+				out += normalStyle.Render(prIndent+tri+" "+line) + "\n"
+			}
+			if prExpanded {
+				out += renderPRRuns(pr)
+			}
 		}
 	}
 
@@ -117,17 +224,38 @@ func (d Dashboard) View() string {
 	return out
 }
 
-func renderTree(r state.RepoState) string {
-	out := ""
+func renderBranchSection(r state.RepoState) string {
 	if r.Err != nil && len(r.Runs) == 0 {
-		out += jobRed.Render(wfIndent+"⚠ "+r.Err.Error()) + "\n"
-		return out
+		return jobRed.Render(branchIndent+"⚠ "+r.Err.Error()) + "\n"
 	}
 	if len(r.Runs) == 0 {
-		out += staleStyle.Render(wfIndent+"no runs") + "\n"
-		return out
+		return staleStyle.Render(branchIndent+"no branch runs") + "\n"
 	}
+	branch := r.BranchName()
+	out := staleStyle.Render(branchIndent+"branch: "+branch) + "\n"
 	for _, run := range r.Runs {
+		status := run.Conclusion
+		if status == "" {
+			status = run.Status
+		}
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		for _, job := range run.Jobs {
+			jobStatus := job.Conclusion
+			if jobStatus == "" {
+				jobStatus = job.Status
+			}
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+		}
+	}
+	return out
+}
+
+func renderPRRuns(pr state.PRState) string {
+	if len(pr.Runs) == 0 {
+		return staleStyle.Render(wfIndent+"no runs") + "\n"
+	}
+	out := ""
+	for _, run := range pr.Runs {
 		status := run.Conclusion
 		if status == "" {
 			status = run.Status
@@ -157,8 +285,15 @@ func repoRow(r state.RepoState) string {
 }
 
 func workflowSummary(r state.RepoState) string {
-	if r.Err != nil && len(r.Runs) == 0 {
+	if r.Err != nil && len(r.Runs) == 0 && len(r.PRs) == 0 {
 		return "error"
+	}
+	if len(r.PRs) > 0 {
+		open := len(r.PRs)
+		if open == 1 {
+			return "1 PR open"
+		}
+		return fmt.Sprintf("%d PRs open", open)
 	}
 	if len(r.Runs) == 0 {
 		return "no runs"

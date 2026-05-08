@@ -15,12 +15,13 @@ import (
 
 // stubFetcher is a test double for the GitHub client.
 type stubFetcher struct {
-	runs []githubclient.WorkflowRun
-	err  error
+	runs   []githubclient.WorkflowRun
+	prRuns []githubclient.PRRun
+	err    error
 }
 
-func (s *stubFetcher) FetchRuns(_ context.Context, _ githubclient.RepoQuery) ([]githubclient.WorkflowRun, error) {
-	return s.runs, s.err
+func (s *stubFetcher) FetchAll(_ context.Context, _ githubclient.RepoQuery) (githubclient.RepoData, error) {
+	return githubclient.RepoData{BranchRuns: s.runs, PRRuns: s.prRuns}, s.err
 }
 
 func stubFactory(runs []githubclient.WorkflowRun, err error) ClientFactory {
@@ -33,7 +34,7 @@ func writeConfig(t *testing.T, content string) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte(content), 0600)
+	_ = os.WriteFile(path, []byte(content), 0600)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -94,14 +95,6 @@ name = "git-green"
 	p := New(cfg, factory)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Manually invoke two fetches.
-	ch := make(chan interface{ GetRepos() interface{} }, 2)
-	_ = ch
-
-	// Use forceRefresh path via direct fetch calls.
-	snapCh := make(chan interface{}, 2)
-	_ = snapCh
 
 	// Test via Start with very short interval.
 	cfg.Settings.PollInterval = 1

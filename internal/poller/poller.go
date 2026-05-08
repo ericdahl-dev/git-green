@@ -13,7 +13,7 @@ import (
 
 // Fetcher is the interface the Poller uses to fetch runs — allows test substitution.
 type Fetcher interface {
-	FetchRuns(ctx context.Context, q githubclient.RepoQuery) ([]githubclient.WorkflowRun, error)
+	FetchAll(ctx context.Context, q githubclient.RepoQuery) (githubclient.RepoData, error)
 }
 
 // ClientFactory creates a Fetcher for a given token.
@@ -34,10 +34,18 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		repos[i] = state.RepoState{
 			Owner:     r.Owner,
 			Name:      r.Name,
+			Branch:    r.Branch,
 			Stoplight: aggregator.StoplightGrey,
 		}
 	}
 	return &Poller{cfg: cfg, factory: factory, current: repos}
+}
+
+// Snapshot returns an immutable view of the current (possibly initial) state.
+func (p *Poller) Snapshot() state.Snapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return state.New(p.current)
 }
 
 // Start begins polling on the configured interval, sending Snapshots to the returned channel.
@@ -108,32 +116,42 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
+			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
 			Runs:      prev.Runs,
+			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
 		}
 	}
 
 	client := p.factory(token)
-	runs, err := client.FetchRuns(ctx, githubclient.RepoQuery{
+	q := githubclient.RepoQuery{
 		Owner:     repo.Owner,
 		Name:      repo.Name,
 		Branch:    repo.Branch,
 		Workflows: repo.Workflows,
-	})
+	}
+
+	data, err := client.FetchAll(ctx, q)
 	if err != nil {
 		now := time.Now()
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
+			Branch:    repo.Branch,
 			Stoplight: prev.Stoplight,
 			Runs:      prev.Runs,
+			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
 		}
 	}
 
+	runs := data.BranchRuns
+	prRuns := data.PRRuns
+
+	// Aggregate stoplight from default-branch runs.
 	statuses := make([]aggregator.RunStatus, 0, len(runs))
 	for _, r := range runs {
 		s := r.Conclusion
@@ -143,11 +161,33 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		statuses = append(statuses, aggregator.RunStatus(s))
 	}
 
+	// Build PRStates.
+	prStates := make([]state.PRState, 0, len(prRuns))
+	for _, pr := range prRuns {
+		prStatuses := make([]aggregator.RunStatus, 0, len(pr.Runs))
+		for _, r := range pr.Runs {
+			s := r.Conclusion
+			if s == "" {
+				s = r.Status
+			}
+			prStatuses = append(prStatuses, aggregator.RunStatus(s))
+		}
+		prStates = append(prStates, state.PRState{
+			Number:    pr.PR.Number,
+			Title:     pr.PR.Title,
+			HTMLURL:   pr.PR.HTMLURL,
+			Stoplight: aggregator.Aggregate(prStatuses),
+			Runs:      pr.Runs,
+		})
+	}
+
 	return state.RepoState{
 		Owner:     repo.Owner,
 		Name:      repo.Name,
+		Branch:    repo.Branch,
 		Stoplight: aggregator.Aggregate(statuses),
 		Runs:      runs,
+		PRs:       prStates,
 		StaleAt:   nil,
 		Err:       nil,
 	}
