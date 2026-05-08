@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="370" viewBox="0 0 780 370">
+  <style>
+    .bg { fill: #1a1a1a; }
+    .term { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace; font-size: 13.5px; }
+    .bold { font-weight: 700; }
+    .faint { opacity: 0.45; }
+    .selected { fill: #e879a0; font-weight: 700; }
+    .dim { fill: #94a3b8; }
+  </style>
+
+  <rect width="780" height="370" rx="10" class="bg"/>
+  <rect width="780" height="36" rx="10" fill="#2a2a2a"/>
+  <rect y="26" width="780" height="10" fill="#2a2a2a"/>
+  <circle cx="18" cy="18" r="6" fill="#ff5f56"/>
+  <circle cx="38" cy="18" r="6" fill="#ffbd2e"/>
+  <circle cx="58" cy="18" r="6" fill="#27c93f"/>
+  <text x="390" y="23" text-anchor="middle" font-family="monospace" font-size="12" fill="#888">git-green</text>
+
+  <g class="term" fill="#e2e8f0" transform="translate(24, 58)">
+
+    <text x="0" y="0" class="bold" fill="#e2e8f0">git-green</text>
+
+    <!-- row 1: selected, expanded, yellow -->
+    <text x="0" y="28" class="selected">▼ 🟡  ericdahl-dev/git-green                     CI · in_progress</text>
+
+    <text x="0" y="50" class="faint" fill="#94a3b8">      branch: main</text>
+    <text x="0"  y="70" fill="#eab308">          ●</text><text x="22"  y="70">  CI</text>
+    <text x="0"  y="90" fill="#eab308">              ●</text><text x="22"  y="90" class="dim">  build</text>
+    <text x="0" y="110" fill="#eab308">              ●</text><text x="22" y="110" class="dim">  test</text>
+    <text x="0" y="130" fill="#eab308">              ●</text><text x="22" y="130" class="dim">  lint</text>
+
+    <text x="0" y="152" fill="#e2e8f0">      ▶ 🟡  PR #12 · feat: add notifications</text>
+    <text x="0" y="174" fill="#e2e8f0">      ▶ 🟢  PR #11 · docs: update PRD and CONTEXT.md</text>
+
+    <!-- row 2: green -->
+    <text x="0" y="202" fill="#e2e8f0">  ▶ 🟢  ericdahl-dev/voice-assistant              CI · success</text>
+
+    <text x="0" y="300" class="faint" fill="#94a3b8">↑/↓ navigate  enter/space expand  o open  r refresh  q quit  ? help</text>
+  </g>
+</svg>
