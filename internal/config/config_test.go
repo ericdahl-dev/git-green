@@ -34,7 +34,7 @@ name = "git-green"
 func TestExplicitPollInterval(t *testing.T) {
 	path := writeTempConfig(t, `
 [settings]
-poll_interval = 60
+poll_interval_seconds = 60
 
 [[repos]]
 owner = "ericdahl-dev"
@@ -58,13 +58,113 @@ poll_interval = 0
 owner = "ericdahl-dev"
 name = "git-green"
 `)
-	// poll_interval = 0 triggers the default (15), not an error
+	// poll_interval_seconds = 0 triggers the default (15), not an error
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Settings.PollInterval != DefaultPollInterval {
 		t.Errorf("expected default %d, got %d", DefaultPollInterval, cfg.Settings.PollInterval)
+	}
+}
+
+func TestDefaultStuckThreshold(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Settings.StuckThresholdMinutes != DefaultStuckThresholdMinutes {
+		t.Errorf("expected %d, got %d", DefaultStuckThresholdMinutes, cfg.Settings.StuckThresholdMinutes)
+	}
+}
+
+func TestExplicitStuckThreshold(t *testing.T) {
+	path := writeTempConfig(t, `
+[settings]
+stuck_threshold_minutes = 60
+
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Settings.StuckThresholdMinutes != 60 {
+		t.Errorf("expected 60, got %d", cfg.Settings.StuckThresholdMinutes)
+	}
+}
+
+func TestWebhookValidURL(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+
+[[webhooks]]
+url = "https://hooks.example.com/git-green"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Webhooks) != 1 || cfg.Webhooks[0].URL != "https://hooks.example.com/git-green" {
+		t.Errorf("unexpected webhooks: %+v", cfg.Webhooks)
+	}
+}
+
+func TestWebhookInvalidURL(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+
+[[webhooks]]
+url = "not-a-url"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid webhook url")
+	}
+}
+
+func TestWebhookEmptyURL(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+
+[[webhooks]]
+url = ""
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for empty webhook url")
+	}
+}
+
+func TestWebhookWithSecret(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "ericdahl-dev"
+name = "git-green"
+
+[[webhooks]]
+url = "https://hooks.example.com/git-green"
+secret = "mysecret"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Webhooks[0].Secret != "mysecret" {
+		t.Errorf("expected secret, got %q", cfg.Webhooks[0].Secret)
 	}
 }
 

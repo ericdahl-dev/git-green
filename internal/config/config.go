@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,9 +11,11 @@ import (
 )
 
 const DefaultPollInterval = 15
+const DefaultStuckThresholdMinutes = 30
 
 type Settings struct {
-	PollInterval int `toml:"poll_interval"`
+	PollInterval         int `toml:"poll_interval_seconds"`
+	StuckThresholdMinutes int `toml:"stuck_threshold_minutes"`
 }
 
 type Org struct {
@@ -28,10 +31,16 @@ type Repo struct {
 	Workflows []string `toml:"workflows"`
 }
 
+type Webhook struct {
+	URL    string `toml:"url"`
+	Secret string `toml:"secret"`
+}
+
 type Config struct {
-	Settings Settings `toml:"settings"`
-	Orgs     []Org    `toml:"orgs"`
-	Repos    []Repo   `toml:"repos"`
+	Settings Settings  `toml:"settings"`
+	Orgs     []Org     `toml:"orgs"`
+	Repos    []Repo    `toml:"repos"`
+	Webhooks []Webhook `toml:"webhooks"`
 
 	resolvedTokens map[string]string
 }
@@ -54,11 +63,25 @@ func Load(path string) (*Config, error) {
 		cfg.Settings.PollInterval = DefaultPollInterval
 	}
 	if cfg.Settings.PollInterval < 1 {
-		return nil, fmt.Errorf("poll_interval must be at least 1 second")
+		return nil, fmt.Errorf("poll_interval_seconds must be at least 1 second")
+	}
+
+	if cfg.Settings.StuckThresholdMinutes == 0 {
+		cfg.Settings.StuckThresholdMinutes = DefaultStuckThresholdMinutes
 	}
 
 	if len(cfg.Repos) == 0 {
 		return nil, fmt.Errorf("config must include at least one [[repos]] entry")
+	}
+
+	for i, wh := range cfg.Webhooks {
+		if wh.URL == "" {
+			return nil, fmt.Errorf("webhooks[%d]: url is required", i)
+		}
+		u, err := url.ParseRequestURI(wh.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return nil, fmt.Errorf("webhooks[%d]: invalid url %q (must be http or https)", i, wh.URL)
+		}
 	}
 
 	cfg.resolvedTokens = make(map[string]string)

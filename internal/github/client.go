@@ -27,10 +27,11 @@ type WorkflowRun struct {
 
 // PR represents an open pull request.
 type PR struct {
-	Number  int
-	Title   string
-	HeadSHA string
-	HTMLURL string
+	Number    int
+	Title     string
+	HeadSHA   string
+	HTMLURL   string
+	Mergeable string // "clean", "conflicting", "unknown", or "" if not yet computed
 }
 
 // PRRun groups an open PR with its workflow runs.
@@ -93,10 +94,11 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 	for _, pr := range prs {
 		sha := pr.GetHead().GetSHA()
 		p := PR{
-			Number:  pr.GetNumber(),
-			Title:   pr.GetTitle(),
-			HeadSHA: sha,
-			HTMLURL: pr.GetHTMLURL(),
+			Number:    pr.GetNumber(),
+			Title:     pr.GetTitle(),
+			HeadSHA:   sha,
+			HTMLURL:   pr.GetHTMLURL(),
+			Mergeable: pr.GetMergeableState(),
 		}
 		runs, err := c.fetchRunsForRef(ctx, q, sha)
 		if err != nil {
