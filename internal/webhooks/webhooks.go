@@ -84,7 +84,7 @@ func (d *Dispatcher) post(wh config.Webhook, body []byte) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
