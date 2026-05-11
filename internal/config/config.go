@@ -12,7 +12,7 @@ import (
 const DefaultPollInterval = 15
 
 type Settings struct {
-	PollInterval int `toml:"poll_interval"`
+	PollInterval int `toml:"poll_interval_seconds"`
 }
 
 type Org struct {
@@ -54,7 +54,7 @@ func Load(path string) (*Config, error) {
 		cfg.Settings.PollInterval = DefaultPollInterval
 	}
 	if cfg.Settings.PollInterval < 1 {
-		return nil, fmt.Errorf("poll_interval must be at least 1 second")
+		return nil, fmt.Errorf("poll_interval_seconds must be at least 1 second")
 	}
 
 	if len(cfg.Repos) == 0 {

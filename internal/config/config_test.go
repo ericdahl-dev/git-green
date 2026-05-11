@@ -34,7 +34,7 @@ name = "git-green"
 func TestExplicitPollInterval(t *testing.T) {
 	path := writeTempConfig(t, `
 [settings]
-poll_interval = 60
+poll_interval_seconds = 60
 
 [[repos]]
 owner = "ericdahl-dev"
@@ -58,7 +58,7 @@ poll_interval = 0
 owner = "ericdahl-dev"
 name = "git-green"
 `)
-	// poll_interval = 0 triggers the default (15), not an error
+	// poll_interval_seconds = 0 triggers the default (15), not an error
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
