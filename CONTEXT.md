@@ -108,6 +108,13 @@ _Avoid_: refresh, sync, watch
 | `o` | Open run in browser |
 | `q` | Quit |
 | `?` | Toggle help overlay |
+| `esc` | Close help overlay |
+
+## CLI
+
+- **`git-green`** (no args) — start the dashboard; requires a valid config file.
+- **`git-green init`** — interactive starter config (`--force` overwrites an existing file).
+- **`GIT_GREEN_DEBUG`** — when non-empty, emit debug logs for each repo poll (stderr).
 
 ## Flagged ambiguities
 

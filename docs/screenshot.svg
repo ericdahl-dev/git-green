@@ -18,7 +18,8 @@
 
   <g class="term" fill="#e2e8f0" transform="translate(24, 58)">
 
-    <text x="0" y="0" class="bold" fill="#e2e8f0">git-green</text>
+    <!-- Title line matches TUI: app name + optional fetch spinner (MiniDot frame) -->
+    <text x="0" y="0" class="bold" fill="#e2e8f0">git-green <tspan fill="#d946ef">⠋</tspan></text>
 
     <!-- row 1: selected, expanded, yellow -->
     <text x="0" y="28" class="selected">▼ 🟡  ericdahl-dev/git-green                     CI · in_progress</text>

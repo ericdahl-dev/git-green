@@ -15,6 +15,7 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 - **Auto-polling** — refreshes every 15 seconds (configurable); retains last-known status on API errors
 - **Multi-org** — per-org token config with `gh auth token` fallback
 - **Single binary** — no runtime, no dependencies
+- **Interactive init** — `git-green init` writes a starter config via a terminal form
 
 ## Install
 
@@ -22,13 +23,24 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 go install github.com/ericdahl-dev/git-green@latest
 ```
 
+## First-time config
+
+Run an interactive wizard (writes `~/.config/git-green/config.toml`):
+
+```bash
+git-green init
+```
+
+Use `git-green init --force` to overwrite an existing file.
+
 ## Config
 
-Create `~/.config/git-green/config.toml`:
+Create `~/.config/git-green/config.toml` by hand, or start from `git-green init` and edit:
 
 ```toml
 [settings]
-poll_interval = 15  # seconds
+poll_interval_seconds = 15
+# stuck_threshold_minutes = 30   # optional; default 30
 
 [[orgs]]
 name = "your-org"
@@ -74,4 +86,9 @@ name = "your-repo"
 | `r` | Force refresh |
 | `o` | Open run in browser |
 | `q` | Quit |
-| `?` | Help overlay |
+| `?` | Toggle help overlay (Markdown) |
+| `esc` | Close help overlay |
+
+## Troubleshooting
+
+Set `GIT_GREEN_DEBUG=1` to print per-repo fetch debug lines to stderr (charm `log`).
