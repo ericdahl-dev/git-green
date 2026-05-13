@@ -12,7 +12,6 @@ import (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).MarginBottom(1)
 	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	normalStyle   = lipgloss.NewStyle()
 	staleStyle    = lipgloss.NewStyle().Faint(true)
@@ -173,8 +172,34 @@ func (d Dashboard) SelectedRepo() *state.RepoState {
 	return &r
 }
 
-func (d Dashboard) View() string {
-	out := titleStyle.Render("git-green") + "\n"
+// SelectedRunURL returns the HTML URL of the primary workflow run for the
+// selected repo row or PR row, if any.
+func (d Dashboard) SelectedRunURL() string {
+	if len(d.rows) == 0 {
+		return ""
+	}
+	row := d.rows[d.cursor]
+	repo := d.snapshot.Repos[row.repoIdx]
+	switch row.kind {
+	case kindPR:
+		if row.prIdx >= len(repo.PRs) {
+			return ""
+		}
+		pr := repo.PRs[row.prIdx]
+		if len(pr.Runs) > 0 {
+			return pr.Runs[0].HTMLURL
+		}
+	default:
+		if len(repo.Runs) > 0 {
+			return repo.Runs[0].HTMLURL
+		}
+	}
+	return ""
+}
+
+// BodyView renders the dashboard without the app title (the root model prepends title and spinner).
+func (d Dashboard) BodyView() string {
+	out := ""
 
 	if len(d.snapshot.Repos) == 0 {
 		out += staleStyle.Render("  No repos configured.") + "\n"
@@ -222,6 +247,10 @@ func (d Dashboard) View() string {
 
 	out += "\n" + hintStyle.Render("↑/↓ navigate  enter/space expand  o open  r refresh  q quit  ? help")
 	return out
+}
+
+func (d Dashboard) View() string {
+	return d.BodyView()
 }
 
 func renderBranchSection(r state.RepoState) string {

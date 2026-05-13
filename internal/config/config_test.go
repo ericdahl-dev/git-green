@@ -213,6 +213,28 @@ name = "git-green"
 	}
 }
 
+func TestWriteStarterRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git-green", "config.toml")
+	if err := WriteStarter(path, "acme", "widgets", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("repos: got %d", len(cfg.Repos))
+	}
+	r := cfg.Repos[0]
+	if r.Owner != "acme" || r.Name != "widgets" || r.Branch != "develop" {
+		t.Fatalf("repo: %+v", r)
+	}
+	if cfg.Settings.PollInterval != DefaultPollInterval {
+		t.Errorf("poll interval: %d", cfg.Settings.PollInterval)
+	}
+}
+
 func TestExplicitToken(t *testing.T) {
 	path := writeTempConfig(t, `
 [[orgs]]
