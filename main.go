@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
+	bspin "github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/ericdahl-dev/git-green/internal/config"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 	"github.com/ericdahl-dev/git-green/internal/poller"
 	"github.com/ericdahl-dev/git-green/internal/state"
 	"github.com/ericdahl-dev/git-green/internal/ui"
+	"github.com/ericdahl-dev/git-green/internal/wizard"
 )
 
 type model struct {
@@ -23,6 +30,9 @@ type model struct {
 	pollCtx     context.Context
 	poller      *poller.Poller
 	pollChWrite chan state.Snapshot
+	winWidth    int
+	fetching    bool
+	spinner     bspin.Model
 }
 
 func waitForSnapshot(ch <-chan state.Snapshot) tea.Cmd {
@@ -35,14 +45,34 @@ func waitForSnapshot(ch <-chan state.Snapshot) tea.Cmd {
 	}
 }
 
+func kickSpinner(s bspin.Model) tea.Cmd {
+	return func() tea.Msg {
+		return s.Tick()
+	}
+}
+
 func (m model) Init() tea.Cmd {
-	return waitForSnapshot(m.pollCh)
+	return tea.Batch(
+		waitForSnapshot(m.pollCh),
+		kickSpinner(m.spinner),
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.winWidth = msg.Width
+
+	case bspin.TickMsg:
+		if !m.fetching {
+			return m, nil
+		}
+		var sc tea.Cmd
+		m.spinner, sc = m.spinner.Update(msg)
+		cmds = append(cmds, sc)
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -55,14 +85,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		case "r":
+			m.fetching = true
 			m.poller.ForceRefresh(m.pollCtx, m.pollChWrite)
-			return m, nil
+			cmds = append(cmds, kickSpinner(m.spinner))
+			var dashCmd tea.Cmd
+			m.dashboard, dashCmd = m.dashboard.Update(msg)
+			cmds = append(cmds, dashCmd)
+			return m, tea.Batch(cmds...)
 		case "o":
-			m.openInBrowser()
+			m.openSelectedURL()
 			return m, nil
 		}
 
 	case state.Snapshot:
+		m.fetching = false
 		cmds = append(cmds, waitForSnapshot(m.pollCh))
 		var dashCmd tea.Cmd
 		m.dashboard, dashCmd = m.dashboard.Update(msg)
@@ -78,16 +114,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.showHelp {
-		return ui.Help{}.View()
+		return ui.RenderHelp(m.winWidth)
 	}
-	return m.dashboard.View()
+	title := ui.TitleLine(m.fetching, m.spinner.View())
+	return title + m.dashboard.BodyView()
 }
 
-func (m *model) openInBrowser() {
-	repo := m.dashboard.SelectedRepo()
-	if repo != nil && len(repo.Runs) > 0 {
-		_ = exec.Command("open", repo.Runs[0].HTMLURL).Start()
+func (m *model) openSelectedURL() {
+	u := m.dashboard.SelectedRunURL()
+	if u == "" {
+		return
 	}
+	var c *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		c = exec.Command("open", u)
+	case "windows":
+		c = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
+	default:
+		c = exec.Command("xdg-open", u)
+	}
+	_ = c.Start()
 }
 
 func configPath() string {
@@ -98,7 +145,30 @@ func configPath() string {
 	return filepath.Join(home, ".config", "git-green", "config.toml")
 }
 
+func runInit(args []string) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	force := fs.Bool("force", false, "overwrite existing config file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	path := configPath()
+	if err := wizard.RunInteractive(path, *force); err != nil {
+		if errors.Is(err, wizard.ErrUserAborted) {
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "git-green init: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %s\n", path)
+	return 0
+}
+
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "init" {
+		os.Exit(runInit(os.Args[2:]))
+	}
+
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "git-green: %v\n", err)
@@ -122,6 +192,11 @@ func main() {
 		close(writeCh)
 	}()
 
+	spin := bspin.New(
+		bspin.WithSpinner(bspin.MiniDot),
+		bspin.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+	)
+
 	m := model{
 		dashboard:   ui.NewDashboard(p.Snapshot()),
 		pollCh:      writeCh,
@@ -129,6 +204,9 @@ func main() {
 		pollCtx:     ctx,
 		poller:      p,
 		pollChWrite: writeCh,
+		winWidth:    80,
+		fetching:    true,
+		spinner:     spin,
 	}
 
 	prog := tea.NewProgram(m, tea.WithAltScreen())

@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -14,7 +16,7 @@ const DefaultPollInterval = 15
 const DefaultStuckThresholdMinutes = 30
 
 type Settings struct {
-	PollInterval         int `toml:"poll_interval_seconds"`
+	PollInterval          int `toml:"poll_interval_seconds"`
 	StuckThresholdMinutes int `toml:"stuck_threshold_minutes"`
 }
 
@@ -123,4 +125,36 @@ func ghAuthToken() (string, error) {
 		return "", fmt.Errorf("no token configured and 'gh auth token' failed — run 'gh auth login' or set a token in the config: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+type starterConfig struct {
+	Settings Settings `toml:"settings"`
+	Repos    []Repo   `toml:"repos"`
+}
+
+// WriteStarter writes a minimal valid config with one [[repos]] entry.
+func WriteStarter(path, owner, name, branch string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	sc := starterConfig{
+		Settings: Settings{
+			PollInterval:          DefaultPollInterval,
+			StuckThresholdMinutes: DefaultStuckThresholdMinutes,
+		},
+		Repos: []Repo{{
+			Owner:  strings.TrimSpace(owner),
+			Name:   strings.TrimSpace(name),
+			Branch: strings.TrimSpace(branch),
+		}},
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(sc); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	"github.com/ericdahl-dev/git-green/internal/config"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
+	"github.com/ericdahl-dev/git-green/internal/logx"
 	"github.com/ericdahl-dev/git-green/internal/state"
 	"github.com/ericdahl-dev/git-green/internal/webhooks"
 )
@@ -120,6 +121,7 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 }
 
 func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.RepoState) state.RepoState {
+	logx.Debug("fetch repo", "owner", repo.Owner, "name", repo.Name)
 	token, err := p.cfg.TokenForOrg(repo.Owner)
 	if err != nil {
 		now := time.Now()
@@ -204,14 +206,14 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	}
 
 	return state.RepoState{
-		Owner:     repo.Owner,
-		Name:      repo.Name,
-		Branch:    repo.Branch,
-		Stoplight: aggregator.Aggregate(statuses),
-		Runs:      runs,
-		PRs:       prStates,
-		StaleAt:   nil,
-		Err:       nil,
+		Owner:      repo.Owner,
+		Name:       repo.Name,
+		Branch:     repo.Branch,
+		Stoplight:  aggregator.Aggregate(statuses),
+		Runs:       runs,
+		PRs:        prStates,
+		StaleAt:    nil,
+		Err:        nil,
 		StuckSince: prev.StuckSince,
 	}
 }
