@@ -26,7 +26,10 @@ _Avoid_: pull request (use PR), change, diff
 
 **Branch section**: The default/configured-branch CI rows rendered above PR rows when a Repo is expanded. Shows the latest Run per Workflow for the tracked branch.
 
-**Config file**: The user-managed file at `~/.config/git-green/config.toml` that lists which Repos to watch and any per-Org token overrides.
+**Config file**: The user-managed file at `~/.config/git-green/config.toml` that lists which Repos to watch and any per-Org token overrides. Can be edited directly or managed via the in-TUI Repo manager.
+
+**Repo manager**: The in-TUI CRUD screen (key: `m`) for adding, editing, deleting, and toggling Repos. Changes are written to the Config file immediately and the Poller reloads automatically.
+_Avoid_: settings screen, config editor
 
 ## Relationships
 
@@ -36,6 +39,7 @@ _Avoid_: pull request (use PR), change, diff
 - A **Run** has one or more **Jobs**
 - A **Job** has one or more **Steps**
 - A **PR** has a head SHA; the dashboard fetches the latest Run per Workflow for that SHA
+- A **Repo** may be **disabled** (`enabled = false`), in which case it is excluded from all Poller activity and makes no API calls
 
 ## Example dialogue
 
@@ -89,15 +93,20 @@ _Avoid_: detail view, drill-down screen
 
 The mechanism by which the TUI fetches fresh data from the GitHub API. Runs on a configurable interval (default: 15 seconds). On API failure, the last known status is retained and shown with a staleness indicator rather than blanking the row.
 
-Each poll cycle makes the following API calls per Repo:
+Each poll cycle makes the following API calls per enabled Repo:
+- 1 × `Repositories.Get` (first poll only, when no branch is configured — result cached)
 - 1 × `ListRepositoryWorkflowRuns` (branch runs)
 - 1 × `PullRequests.List`
 - 1 × `ListRepositoryWorkflowRuns` per open PR (head SHA runs)
 - 1 × `ListWorkflowJobs` per branch Workflow Run
 
+Disabled Repos are skipped entirely — no API calls are made for them.
+
 _Avoid_: refresh, sync, watch
 
 ## Keybindings
+
+### Dashboard
 
 | Key | Action |
 |---|---|
@@ -106,9 +115,27 @@ _Avoid_: refresh, sync, watch
 | `enter` / `space` | Expand/collapse Repo or PR row |
 | `r` | Force refresh |
 | `o` | Open run in browser |
+| `m` | Open Repo manager |
 | `q` | Quit |
 | `?` | Toggle help overlay |
 | `esc` | Close help overlay |
+
+### Repo manager
+
+| Key | Action |
+|---|---|
+| `↑` / `k` | Navigate up |
+| `↓` / `j` | Navigate down |
+| `t` / `space` | Toggle enable / disable |
+| `a` | Add Repo |
+| `e` | Edit Repo |
+| `d` | Delete Repo |
+| `esc` | Back to Dashboard |
+
+## Install
+
+- **Homebrew**: `brew install ericdahl-dev/tap/git-green`
+- **Go**: `go install github.com/ericdahl-dev/git-green@latest`
 
 ## CLI
 
@@ -120,3 +147,4 @@ _Avoid_: refresh, sync, watch
 
 - "monitor" — resolved: means live dashboard display, not notification/alerting
 - "detail view" — resolved: removed in favour of inline expand/collapse tree on the Dashboard
+- "enabled/disabled" — resolved: `enabled = false` in config suppresses all API calls for that Repo; the Repo manager toggles this at runtime
