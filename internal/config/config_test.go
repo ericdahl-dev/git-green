@@ -298,3 +298,125 @@ name = "git-green"
 		t.Fatal("expected error for missing token_env variable")
 	}
 }
+
+func TestIsEnabled(t *testing.T) {
+	f := false
+	tr := true
+	if !(Repo{}.IsEnabled()) {
+		t.Error("nil Enabled should be enabled")
+	}
+	if !(Repo{Enabled: &tr}.IsEnabled()) {
+		t.Error("Enabled=true should be enabled")
+	}
+	if (Repo{Enabled: &f}.IsEnabled()) {
+		t.Error("Enabled=false should be disabled")
+	}
+}
+
+func TestEnabledRepos(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "enabled"
+
+[[repos]]
+owner = "b"
+name = "disabled"
+enabled = false
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.EnabledRepos()
+	if len(got) != 1 || got[0].Name != "enabled" {
+		t.Errorf("expected 1 enabled repo, got %+v", got)
+	}
+}
+
+func TestToggleRepo(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "r"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.ToggleRepo(0); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Repos[0].IsEnabled() {
+		t.Error("expected disabled after first toggle")
+	}
+	if err := cfg.ToggleRepo(0); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Repos[0].IsEnabled() {
+		t.Error("expected enabled after second toggle")
+	}
+}
+
+func TestAddAndRemoveRepo(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "first"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.AddRepo(Repo{Owner: "b", Name: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("expected 2 repos, got %d", len(cfg.Repos))
+	}
+	if err := cfg.RemoveRepo(0); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "second" {
+		t.Errorf("unexpected repos after remove: %+v", cfg.Repos)
+	}
+}
+
+func TestUpdateRepo(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "old"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.UpdateRepo(0, Repo{Owner: "a", Name: "new", Branch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Repos[0].Name != "new" || cfg.Repos[0].Branch != "develop" {
+		t.Errorf("unexpected repo after update: %+v", cfg.Repos[0])
+	}
+}
+
+func TestSavePersists(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "r"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cfg.ToggleRepo(0)
+
+	cfg2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Repos[0].IsEnabled() {
+		t.Error("toggled state not persisted to disk")
+	}
+}

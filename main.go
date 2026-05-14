@@ -22,8 +22,17 @@ import (
 	"github.com/ericdahl-dev/git-green/internal/wizard"
 )
 
+type screen int
+
+const (
+	screenDashboard screen = iota
+	screenManage
+)
+
 type model struct {
+	screen      screen
 	dashboard   ui.Dashboard
+	manage      ui.Manage
 	showHelp    bool
 	pollCh      <-chan state.Snapshot
 	pollCancel  context.CancelFunc
@@ -33,6 +42,7 @@ type model struct {
 	winWidth    int
 	fetching    bool
 	spinner     bspin.Model
+	cfg         *config.Config
 }
 
 func waitForSnapshot(ch <-chan state.Snapshot) tea.Cmd {
@@ -73,16 +83,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, sc = m.spinner.Update(msg)
 		cmds = append(cmds, sc)
 
+	case ui.BackMsg:
+		m.screen = screenDashboard
+		return m, nil
+
+	case ui.ConfigChangedMsg:
+		m.cfg = msg.Config
+		m.poller.ReloadConfig(m.cfg, m.pollCtx, m.pollChWrite)
+		m.fetching = true
+		cmds = append(cmds, kickSpinner(m.spinner))
+		return m, tea.Batch(cmds...)
+
 	case tea.KeyMsg:
+		if m.screen == screenManage {
+			var manCmd tea.Cmd
+			m.manage, manCmd = m.manage.Update(msg)
+			return m, manCmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.pollCancel()
 			return m, tea.Quit
-		case "?":
+		case "?": 
 			m.showHelp = !m.showHelp
 			return m, nil
 		case "esc":
 			m.showHelp = false
+			return m, nil
+		case "m":
+			m.screen = screenManage
+			m.manage = ui.NewManage(m.cfg)
 			return m, nil
 		case "r":
 			m.fetching = true
@@ -106,9 +137,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
-	var cmd tea.Cmd
-	m.dashboard, cmd = m.dashboard.Update(msg)
-	cmds = append(cmds, cmd)
+	if m.screen == screenManage {
+		var manCmd tea.Cmd
+		m.manage, manCmd = m.manage.Update(msg)
+		cmds = append(cmds, manCmd)
+	} else {
+		var dashCmd tea.Cmd
+		m.dashboard, dashCmd = m.dashboard.Update(msg)
+		cmds = append(cmds, dashCmd)
+	}
 	return m, tea.Batch(cmds...)
 }
 
@@ -117,7 +154,12 @@ func (m model) View() string {
 		return ui.RenderHelp(m.winWidth)
 	}
 	title := ui.TitleLine(m.fetching, m.spinner.View())
-	return title + m.dashboard.BodyView()
+	switch m.screen {
+	case screenManage:
+		return title + m.manage.View()
+	default:
+		return title + m.dashboard.BodyView()
+	}
 }
 
 func (m *model) openSelectedURL() {
@@ -198,7 +240,10 @@ func main() {
 	)
 
 	m := model{
+		screen:      screenDashboard,
 		dashboard:   ui.NewDashboard(p.Snapshot()),
+		manage:      ui.NewManage(cfg),
+		cfg:         cfg,
 		pollCh:      writeCh,
 		pollCancel:  func() { cancel(); stopPoller() },
 		pollCtx:     ctx,

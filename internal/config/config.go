@@ -31,6 +31,12 @@ type Repo struct {
 	Name      string   `toml:"name"`
 	Branch    string   `toml:"branch"`
 	Workflows []string `toml:"workflows"`
+	Enabled   *bool    `toml:"enabled"`
+}
+
+// IsEnabled returns true unless explicitly set to false.
+func (r Repo) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 type Webhook struct {
@@ -45,6 +51,7 @@ type Config struct {
 	Webhooks []Webhook `toml:"webhooks"`
 
 	resolvedTokens map[string]string
+	path           string
 }
 
 func Load(path string) (*Config, error) {
@@ -86,6 +93,7 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	cfg.path = path
 	cfg.resolvedTokens = make(map[string]string)
 	for _, org := range cfg.Orgs {
 		token, err := resolveToken(org)
@@ -96,6 +104,69 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// Path returns the file path this config was loaded from.
+func (c *Config) Path() string { return c.path }
+
+// EnabledRepos returns only repos that are enabled.
+func (c *Config) EnabledRepos() []Repo {
+	var out []Repo
+	for _, r := range c.Repos {
+		if r.IsEnabled() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Save writes the config back to the file it was loaded from.
+func (c *Config) Save() error {
+	if c.path == "" {
+		return fmt.Errorf("config has no path set")
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(c.path, buf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
+// AddRepo appends a new repo and saves.
+func (c *Config) AddRepo(r Repo) error {
+	c.Repos = append(c.Repos, r)
+	return c.Save()
+}
+
+// UpdateRepo replaces the repo at index i and saves.
+func (c *Config) UpdateRepo(i int, r Repo) error {
+	if i < 0 || i >= len(c.Repos) {
+		return fmt.Errorf("repo index %d out of range", i)
+	}
+	c.Repos[i] = r
+	return c.Save()
+}
+
+// RemoveRepo removes the repo at index i and saves.
+func (c *Config) RemoveRepo(i int) error {
+	if i < 0 || i >= len(c.Repos) {
+		return fmt.Errorf("repo index %d out of range", i)
+	}
+	c.Repos = append(c.Repos[:i], c.Repos[i+1:]...)
+	return c.Save()
+}
+
+// ToggleRepo flips the enabled state of repo i and saves.
+func (c *Config) ToggleRepo(i int) error {
+	if i < 0 || i >= len(c.Repos) {
+		return fmt.Errorf("repo index %d out of range", i)
+	}
+	enabled := !c.Repos[i].IsEnabled()
+	c.Repos[i].Enabled = &enabled
+	return c.Save()
 }
 
 func (c *Config) TokenForOrg(owner string) (string, error) {

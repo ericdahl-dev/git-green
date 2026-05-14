@@ -42,8 +42,9 @@ type PRRun struct {
 
 // RepoData holds all CI data fetched in a single pass for a repo.
 type RepoData struct {
-	BranchRuns []WorkflowRun
-	PRRuns     []PRRun
+	BranchRuns    []WorkflowRun
+	PRRuns        []PRRun
+	ResolvedBranch string // the branch that was actually queried
 }
 
 // RepoQuery describes what to fetch for a single repo.
@@ -75,7 +76,7 @@ func New(token string) *Client {
 // No ListWorkflows call at all.
 func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 	// Fetch the latest run per workflow on the default/configured branch.
-	branchRuns, err := c.fetchBranchRuns(ctx, q)
+	branchRuns, resolvedBranch, err := c.fetchBranchRuns(ctx, q)
 	if err != nil {
 		return RepoData{}, err
 	}
@@ -107,19 +108,29 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		prRuns = append(prRuns, PRRun{PR: p, Runs: runs})
 	}
 
-	return RepoData{BranchRuns: branchRuns, PRRuns: prRuns}, nil
+	return RepoData{BranchRuns: branchRuns, PRRuns: prRuns, ResolvedBranch: resolvedBranch}, nil
 }
 
 // fetchBranchRuns returns the latest run per workflow on the branch, then
 // fetches jobs for each. Uses ListRepositoryWorkflowRuns (1 call) instead of
 // ListWorkflows + per-workflow queries.
-func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRun, error) {
+// Returns the runs, the resolved branch name, and any error.
+func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRun, string, error) {
+	branch := q.Branch
+	if branch == "" {
+		repo, _, err := c.gh.Repositories.Get(ctx, q.Owner, q.Name)
+		if err != nil {
+			return nil, "", fmt.Errorf("getting default branch for %s/%s: %w", q.Owner, q.Name, err)
+		}
+		branch = repo.GetDefaultBranch()
+	}
+
 	runs, _, err := c.gh.Actions.ListRepositoryWorkflowRuns(ctx, q.Owner, q.Name, &github.ListWorkflowRunsOptions{
-		Branch:      q.Branch,
+		Branch:      branch,
 		ListOptions: github.ListOptions{PerPage: 100},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listing workflow runs for %s/%s: %w", q.Owner, q.Name, err)
+		return nil, "", fmt.Errorf("listing workflow runs for %s/%s: %w", q.Owner, q.Name, err)
 	}
 
 	filterSet := make(map[string]bool, len(q.Workflows))
@@ -151,7 +162,7 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 		// Fetch jobs for branch runs so we can show them expanded.
 		jobs, _, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
+			return nil, "", fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
 		}
 		for _, j := range jobs.Jobs {
 			wr.Jobs = append(wr.Jobs, Job{
@@ -162,7 +173,7 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 		}
 		results = append(results, wr)
 	}
-	return results, nil
+	return results, branch, nil
 }
 
 // fetchRunsForRef returns the latest run per workflow for a given head SHA.
