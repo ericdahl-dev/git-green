@@ -32,8 +32,9 @@ type Poller struct {
 
 // New creates a Poller with the given config and client factory.
 func New(cfg *config.Config, factory ClientFactory) *Poller {
-	repos := make([]state.RepoState, len(cfg.Repos))
-	for i, r := range cfg.Repos {
+	enabled := cfg.EnabledRepos()
+	repos := make([]state.RepoState, len(enabled))
+	for i, r := range enabled {
 		repos[i] = state.RepoState{
 			Owner:     r.Owner,
 			Name:      r.Name,
@@ -85,21 +86,39 @@ func (p *Poller) ForceRefresh(ctx context.Context, ch chan<- state.Snapshot) {
 	go p.fetch(ctx, ch)
 }
 
+// ReloadConfig replaces the config (e.g. after CRUD edits) and triggers an
+// immediate fetch so the dashboard reflects the new repo list.
+func (p *Poller) ReloadConfig(cfg *config.Config, ctx context.Context, ch chan<- state.Snapshot) {
+	p.mu.Lock()
+	p.cfg = cfg
+	p.dispatcher = webhooks.New(cfg.Webhooks)
+	p.mu.Unlock()
+	go p.fetch(ctx, ch)
+}
+
 func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 	var wg sync.WaitGroup
-	results := make([]state.RepoState, len(p.cfg.Repos))
+	enabled := p.cfg.EnabledRepos()
+	results := make([]state.RepoState, len(enabled))
 
 	p.mu.Lock()
 	previous := make([]state.RepoState, len(p.current))
 	copy(previous, p.current)
 	p.mu.Unlock()
 
-	for i, repo := range p.cfg.Repos {
+	for i, repo := range enabled {
 		wg.Add(1)
 		go func(i int, repo config.Repo) {
 			defer wg.Done()
-			rs := p.fetchRepo(ctx, repo, previous[i])
-			results[i] = rs
+			// find previous state by owner/name since indices may shift
+			var prev state.RepoState
+			for _, p := range previous {
+				if p.Owner == repo.Owner && p.Name == repo.Name {
+					prev = p
+					break
+				}
+			}
+			results[i] = p.fetchRepo(ctx, repo, prev)
 		}(i, repo)
 	}
 
@@ -138,10 +157,15 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	}
 
 	client := p.factory(token)
+	// Use the previously-resolved branch so we avoid a Repositories.Get call every poll.
+	branch := repo.Branch
+	if branch == "" {
+		branch = prev.Branch
+	}
 	q := githubclient.RepoQuery{
 		Owner:     repo.Owner,
 		Name:      repo.Name,
-		Branch:    repo.Branch,
+		Branch:    branch,
 		Workflows: repo.Workflows,
 	}
 
@@ -208,7 +232,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	return state.RepoState{
 		Owner:      repo.Owner,
 		Name:       repo.Name,
-		Branch:     repo.Branch,
+		Branch:     data.ResolvedBranch,
 		Stoplight:  aggregator.Aggregate(statuses),
 		Runs:       runs,
 		PRs:        prStates,

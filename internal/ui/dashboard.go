@@ -245,7 +245,7 @@ func (d Dashboard) BodyView() string {
 		}
 	}
 
-	out += "\n" + hintStyle.Render("↑/↓ navigate  enter/space expand  o open  r refresh  q quit  ? help")
+	out += "\n" + hintStyle.Render("↑/↓ navigate  enter/space expand  o open  r refresh  m manage  q quit  ? help")
 	return out
 }
 

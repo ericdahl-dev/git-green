@@ -22,6 +22,7 @@ const helpMarkdown = `# git-green · keybindings
 | **enter** / **space** | Expand or collapse repo or PR |
 | **o** | Open run in browser |
 | **r** | Force refresh |
+| **m** | Manage repos (add / edit / delete / toggle) |
 | **?** | Toggle this help |
 | **esc** | Close help |
 | **q** / **ctrl+c** | Quit |
@@ -58,6 +59,7 @@ func fallbackHelpText() string {
   enter / space  expand/collapse repo or PR
   o              open run in browser
   r              force refresh
+  m              manage repos (add/edit/delete/toggle)
   ?              toggle this help
   esc            close help
   q / ctrl+c     quit`
