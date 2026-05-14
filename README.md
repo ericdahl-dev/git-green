@@ -13,11 +13,20 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 - **Active-first sorting** — in-progress and failing repos/PRs bubble to the top automatically
 - **Inline expand/collapse** — navigate with `↑`/`↓`, toggle any row with `enter`/`space`
 - **Auto-polling** — refreshes every 15 seconds (configurable); retains last-known status on API errors
+- **In-TUI repo management** — add, edit, delete, and enable/disable repos without leaving the terminal
 - **Multi-org** — per-org token config with `gh auth token` fallback
 - **Single binary** — no runtime, no dependencies
 - **Interactive init** — `git-green init` writes a starter config via a terminal form
 
 ## Install
+
+### Homebrew
+
+```bash
+brew install ericdahl-dev/tap/git-green
+```
+
+### Go
 
 ```bash
 go install github.com/ericdahl-dev/git-green@latest
@@ -51,6 +60,7 @@ owner = "your-org"
 name = "your-repo"
 # branch = "main"          # optional; defaults to repo default branch
 # workflows = ["CI"]       # optional; defaults to all workflows
+# enabled = false          # optional; disable without deleting (no API calls made)
 ```
 
 ### Personal accounts and orgs without a token
@@ -78,6 +88,8 @@ name = "your-repo"
 
 ## Keybindings
 
+### Dashboard
+
 | Key | Action |
 |---|---|
 | `↑` / `k` | Navigate up |
@@ -85,10 +97,25 @@ name = "your-repo"
 | `enter` / `space` | Expand / collapse repo or PR row |
 | `r` | Force refresh |
 | `o` | Open run in browser |
+| `m` | Open repo manager |
 | `q` | Quit |
-| `?` | Toggle help overlay (Markdown) |
+| `?` | Toggle help overlay |
 | `esc` | Close help overlay |
+
+### Repo manager (`m`)
+
+| Key | Action |
+|---|---|
+| `↑` / `k` | Navigate up |
+| `↓` / `j` | Navigate down |
+| `t` / `space` | Toggle enable / disable |
+| `a` | Add repo |
+| `e` | Edit repo |
+| `d` | Delete repo |
+| `esc` | Back to dashboard |
+
+Changes are written to `config.toml` immediately and the poller reloads automatically. Disabled repos make no API calls.
 
 ## Troubleshooting
 
-Set `GIT_GREEN_DEBUG=1` to print per-repo fetch debug lines to stderr (charm `log`).
+Set `GIT_GREEN_DEBUG=1` to print per-repo fetch debug lines to stderr.
