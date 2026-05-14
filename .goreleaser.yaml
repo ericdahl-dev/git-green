@@ -1,0 +1,62 @@
+version: 2
+
+project_name: git-green
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+    main: .
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: git-green
+    repository:
+      owner: ericdahl-dev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/ericdahl-dev/git-green"
+    description: "Terminal dashboard for GitHub Actions CI status"
+    license: "MIT"
+    install: |
+      bin.install "git-green"
+    test: |
+      system "#{bin}/git-green", "--help"
+
+release:
+  github:
+    owner: ericdahl-dev
+    name: git-green
