@@ -36,6 +36,6 @@
     <!-- row 2: green -->
     <text x="0" y="202" fill="#e2e8f0">  ▶ 🟢  ericdahl-dev/voice-assistant              CI · success</text>
 
-    <text x="0" y="300" class="faint" fill="#94a3b8">↑/↓ navigate  enter/space expand  o open  r refresh  q quit  ? help</text>
+    <text x="0" y="300" class="faint" fill="#94a3b8">↑/↓ navigate  enter/space expand  o open  r refresh  m manage  q quit  ? help</text>
   </g>
 </svg>
