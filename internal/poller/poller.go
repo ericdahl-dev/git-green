@@ -124,12 +124,13 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 
 	wg.Wait()
 
+	// Mutate results (StuckSince) before assigning to p.current so that
+	// concurrent Snapshot() calls never observe a partially-mutated slice.
+	p.dispatchStuckEvents(previous, results)
+
 	p.mu.Lock()
 	p.current = results
 	p.mu.Unlock()
-
-	// Dispatch webhook events for any newly-stuck conditions.
-	p.dispatchStuckEvents(previous, results)
 
 	snap := state.New(results)
 	select {

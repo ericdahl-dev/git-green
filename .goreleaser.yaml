@@ -44,6 +44,7 @@ changelog:
 
 brews:
   - name: git-green
+    directory: Formula
     repository:
       owner: ericdahl-dev
       name: homebrew-tap
