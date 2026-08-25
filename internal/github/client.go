@@ -2,8 +2,10 @@ package githubclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/go-github/v72/github"
 	"golang.org/x/oauth2"
@@ -245,4 +247,36 @@ func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string) (
 		})
 	}
 	return results, nil
+}
+
+// noFailedJobsFragment is what GitHub says when rerun-failed-jobs has nothing
+// to retry individually — every job either passed or never started. Re-running
+// the whole run is the right call in that case.
+const noFailedJobsFragment = "no failed jobs"
+
+// isNoFailedJobs reports whether err is GitHub declining a rerun-failed-jobs
+// request because the run has no individually-failed jobs.
+func isNoFailedJobs(err error) bool {
+	var resp *github.ErrorResponse
+	if !errors.As(err, &resp) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(resp.Message), noFailedJobsFragment)
+}
+
+// RerunFailedJobs re-runs the failed jobs of a workflow run, falling back to
+// re-running the whole run when GitHub reports there were none. A read-only
+// token fails here with 403; the error is returned so the TUI can show it.
+func (c *Client) RerunFailedJobs(ctx context.Context, owner, name string, runID int64) error {
+	_, err := c.gh.Actions.RerunFailedJobsByID(ctx, owner, name, runID)
+	if err == nil {
+		return nil
+	}
+	if !isNoFailedJobs(err) {
+		return fmt.Errorf("re-running failed jobs for run %d in %s/%s: %w", runID, owner, name, err)
+	}
+	if _, err := c.gh.Actions.RerunWorkflowByID(ctx, owner, name, runID); err != nil {
+		return fmt.Errorf("re-running run %d in %s/%s: %w", runID, owner, name, err)
+	}
+	return nil
 }

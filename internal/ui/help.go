@@ -20,6 +20,7 @@ const helpMarkdown = `# git-green · keybindings
 | **↑** / **k** | Move up |
 | **↓** / **j** | Move down |
 | **enter** / **space** | Expand or collapse repo or PR |
+| **f** | Re-run the failed run on the selected row (confirm with **enter**) |
 | **o** | Open run in browser |
 | **r** | Force refresh |
 | **m** | Manage repos (add / edit / delete / toggle) |
@@ -57,6 +58,7 @@ func fallbackHelpText() string {
   ↑ / k          move up
   ↓ / j          move down
   enter / space  expand/collapse repo or PR
+  f              re-run the failed run on the selected row (enter to confirm)
   o              open run in browser
   r              force refresh
   m              manage repos (add/edit/delete/toggle)

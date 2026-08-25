@@ -46,6 +46,20 @@ type model struct {
 	cfg         *config.Config
 }
 
+// rerunner re-runs a workflow run through a client authenticated with the
+// token for that repo's org, the same way the poller picks one per repo.
+type rerunner struct {
+	cfg *config.Config
+}
+
+func (r rerunner) RerunFailedJobs(ctx context.Context, owner, name string, runID int64) error {
+	token, err := r.cfg.TokenForOrg(owner)
+	if err != nil {
+		return err
+	}
+	return githubclient.New(token).RerunFailedJobs(ctx, owner, name, runID)
+}
+
 func waitForSnapshot(ch <-chan state.Snapshot) tea.Cmd {
 	return func() tea.Msg {
 		snap, ok := <-ch
@@ -91,6 +105,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.ConfigChangedMsg:
 		m.cfg = msg.Config
 		m.poller.ReloadConfig(m.cfg, m.pollCtx, m.pollChWrite)
+		m.dashboard = m.dashboard.WithRerunner(m.pollCtx, rerunner{cfg: m.cfg})
 		m.fetching = true
 		cmds = append(cmds, kickSpinner(m.spinner))
 		return m, tea.Batch(cmds...)
@@ -102,11 +117,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, manCmd
 		}
 
+		// While the dashboard holds a re-run confirmation it owns every key but
+		// the hard quit, so enter/esc reach the prompt instead of the root.
+		if m.dashboard.AwaitingConfirm() && msg.String() != "ctrl+c" {
+			var dashCmd tea.Cmd
+			m.dashboard, dashCmd = m.dashboard.Update(msg)
+			return m, dashCmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.pollCancel()
 			return m, tea.Quit
-		case "?": 
+		case "?":
 			m.showHelp = !m.showHelp
 			return m, nil
 		case "esc":
@@ -277,7 +300,7 @@ func main() {
 
 	m := model{
 		screen:      screenDashboard,
-		dashboard:   ui.NewDashboard(p.Snapshot()),
+		dashboard:   ui.NewDashboard(p.Snapshot()).WithRerunner(ctx, rerunner{cfg: cfg}),
 		manage:      ui.NewManage(cfg),
 		cfg:         cfg,
 		pollCh:      writeCh,

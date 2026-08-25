@@ -1,6 +1,9 @@
 package githubclient
 
 import (
+	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/google/go-github/v72/github"
@@ -48,5 +51,34 @@ func TestRunKeyIsStableAcrossRenamedRuns(t *testing.T) {
 func TestRunKeyFallsBackToName(t *testing.T) {
 	if got, want := runKey(run("CI", "push", 0)), "name:CI"; got != want {
 		t.Errorf("runKey = %q, want %q", got, want)
+	}
+}
+
+func apiError(status int, message string) error {
+	return &github.ErrorResponse{
+		Response: &http.Response{StatusCode: status},
+		Message:  message,
+	}
+}
+
+func TestIsNoFailedJobs(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil},
+		{name: "plain error", err: errors.New("no failed jobs")},
+		{name: "forbidden", err: apiError(http.StatusForbidden, "Resource not accessible by personal access token"), want: false},
+		{name: "no failed jobs", err: apiError(http.StatusForbidden, "No failed jobs to rerun."), want: true},
+		{name: "wrapped", err: fmt.Errorf("re-running: %w", apiError(http.StatusForbidden, "No failed jobs to rerun.")), want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isNoFailedJobs(tc.err); got != tc.want {
+				t.Errorf("isNoFailedJobs = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

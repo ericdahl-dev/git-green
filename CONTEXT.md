@@ -113,12 +113,21 @@ _Avoid_: refresh, sync, watch
 | `↑` / `k` | Navigate up |
 | `↓` / `j` | Navigate down |
 | `enter` / `space` | Expand/collapse Repo or PR row |
+| `f` | Re-run the failed Workflow Run on the selected row (`enter` confirms, `esc` cancels) |
 | `r` | Force refresh |
 | `o` | Open run in browser |
 | `m` | Open Repo manager |
 | `q` | Quit |
 | `?` | Toggle help overlay |
 | `esc` | Close help overlay |
+
+**Re-run** is the only write action. It calls `RerunFailedJobsByID` for the
+selected row's first failed Workflow Run, falling back to `RerunWorkflowByID`
+when GitHub reports there are no individually-failed jobs, and needs a token
+with `actions: write` for that org. The confirmation and the outcome (including
+a 403 from a read-only token) both render in the dashboard hint line.
+
+_Avoid_: fix, retry
 
 ### Repo manager
 

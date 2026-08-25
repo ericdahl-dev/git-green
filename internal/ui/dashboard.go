@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
+	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 	"github.com/ericdahl-dev/git-green/internal/state"
 )
 
@@ -16,6 +18,9 @@ var (
 	normalStyle   = lipgloss.NewStyle()
 	staleStyle    = lipgloss.NewStyle().Faint(true)
 	hintStyle     = lipgloss.NewStyle().Faint(true)
+	confirmStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
+	successStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	wfStyle       = lipgloss.NewStyle().Faint(false)
 	branchIndent  = "      "
 	prIndent      = "      "
@@ -25,7 +30,49 @@ var (
 
 const selectionTimeout = 10 * time.Second
 
+// rerunResultTimeout bounds how long the re-run outcome sits in the hint line.
+// A success normally clears sooner, on the first snapshot that follows it.
+const rerunResultTimeout = 8 * time.Second
+
 type selectionExpiredMsg struct{}
+type rerunDoneMsg struct{ err error }
+type rerunResultExpiredMsg struct{}
+
+// Rerunner re-runs a workflow run. The dashboard holds one so tests can
+// substitute a fake for the GitHub client.
+type Rerunner interface {
+	RerunFailedJobs(ctx context.Context, owner, name string, runID int64) error
+}
+
+type rerunState int
+
+const (
+	rerunIdle rerunState = iota
+	rerunConfirming
+	rerunExecuting
+	rerunShowResult
+)
+
+// rerunTarget identifies the workflow run the f key would re-run.
+type rerunTarget struct {
+	owner    string
+	name     string
+	runID    int64
+	workflow string
+}
+
+func (t rerunTarget) fullName() string { return t.owner + "/" + t.name }
+
+// runFailed reports whether a run finished in a state worth re-running. It
+// covers the conclusions the dashboard paints red plus startup_failure, which
+// is a failure GitHub reports without ever starting a job.
+func runFailed(run githubclient.WorkflowRun) bool {
+	switch run.Conclusion {
+	case "failure", "timed_out", "action_required", "startup_failure":
+		return true
+	}
+	return false
+}
 
 type rowKind int
 
@@ -48,6 +95,27 @@ type Dashboard struct {
 	prExp         map[[2]int]bool
 	lastActivity  time.Time
 	selectionFade bool
+
+	rerunner     Rerunner
+	rerunCtx     context.Context
+	rerunStatus  rerunState
+	rerunTarget  *rerunTarget
+	rerunMsg     string
+	rerunFailure bool
+}
+
+// WithRerunner returns a copy of the dashboard wired to re-run failed runs
+// through r. Re-runs fire against ctx so they are cancelled when the app exits.
+func (d Dashboard) WithRerunner(ctx context.Context, r Rerunner) Dashboard {
+	d.rerunCtx = ctx
+	d.rerunner = r
+	return d
+}
+
+// AwaitingConfirm reports whether the dashboard is holding a re-run
+// confirmation, in which case the root model must hand it every key.
+func (d Dashboard) AwaitingConfirm() bool {
+	return d.rerunStatus == rerunConfirming
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
@@ -116,11 +184,29 @@ func selectionTimeoutCmd() tea.Cmd {
 	})
 }
 
+func rerunResultExpiredCmd() tea.Cmd {
+	return tea.Tick(rerunResultTimeout, func(time.Time) tea.Msg {
+		return rerunResultExpiredMsg{}
+	})
+}
+
 func (d Dashboard) Init() tea.Cmd { return selectionTimeoutCmd() }
 
 func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// While confirming a re-run, only enter/esc are meaningful.
+		if d.rerunStatus == rerunConfirming {
+			switch msg.String() {
+			case "enter":
+				return d.startRerun()
+			case "esc":
+				d.rerunStatus = rerunIdle
+				d.rerunTarget = nil
+			}
+			return d, nil
+		}
+
 		d.lastActivity = time.Now()
 		d.selectionFade = false
 		switch msg.String() {
@@ -148,20 +234,93 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 				key := [2]int{row.repoIdx, row.prIdx}
 				d.prExp[key] = !d.prExp[key]
 			}
+		case "f":
+			// Only a row whose run actually failed can be re-run.
+			if target := d.selectedRerunTarget(); target != nil && d.rerunner != nil {
+				d.rerunStatus = rerunConfirming
+				d.rerunTarget = target
+			}
 		}
 		return d, selectionTimeoutCmd()
 	case selectionExpiredMsg:
 		if time.Since(d.lastActivity) >= selectionTimeout {
 			d.selectionFade = true
 		}
+	case rerunDoneMsg:
+		d.rerunStatus = rerunShowResult
+		if msg.err != nil {
+			d.rerunFailure = true
+			d.rerunMsg = fmt.Sprintf("re-run failed: %v", msg.err)
+		} else {
+			d.rerunFailure = false
+			d.rerunMsg = fmt.Sprintf("↻ re-run requested · %s", d.rerunTarget.workflow)
+		}
+		return d, rerunResultExpiredCmd()
+	case rerunResultExpiredMsg:
+		d.clearRerunResult()
 	case state.Snapshot:
 		d.snapshot = msg
 		d.rows = d.buildRows()
 		if d.cursor >= len(d.rows) && len(d.rows) > 0 {
 			d.cursor = len(d.rows) - 1
 		}
+		// The poll that follows a successful re-run shows the new run, so the
+		// transient notice has done its job. Errors stay until they time out.
+		if d.rerunStatus == rerunShowResult && !d.rerunFailure {
+			d.clearRerunResult()
+		}
 	}
 	return d, nil
+}
+
+// startRerun moves out of the confirmation and fires the re-run in a command.
+func (d Dashboard) startRerun() (Dashboard, tea.Cmd) {
+	d.rerunStatus = rerunExecuting
+	target := *d.rerunTarget
+	rerunner := d.rerunner
+	ctx := d.rerunCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return d, func() tea.Msg {
+		return rerunDoneMsg{err: rerunner.RerunFailedJobs(ctx, target.owner, target.name, target.runID)}
+	}
+}
+
+func (d *Dashboard) clearRerunResult() {
+	d.rerunStatus = rerunIdle
+	d.rerunTarget = nil
+	d.rerunMsg = ""
+	d.rerunFailure = false
+}
+
+// selectedRerunTarget returns the first failed run on the selected row, or nil
+// when the row is green, still running, or has no runs at all.
+func (d Dashboard) selectedRerunTarget() *rerunTarget {
+	if len(d.rows) == 0 {
+		return nil
+	}
+	row := d.rows[d.cursor]
+	repo := d.snapshot.Repos[row.repoIdx]
+	runs := repo.Runs
+	if row.kind == kindPR {
+		if row.prIdx >= len(repo.PRs) {
+			return nil
+		}
+		runs = repo.PRs[row.prIdx].Runs
+	}
+	for _, run := range runs {
+		if !runFailed(run) || run.RunID == 0 {
+			continue
+		}
+		return &rerunTarget{
+			owner:    repo.Owner,
+			name:     repo.Name,
+			runID:    run.RunID,
+			workflow: run.WorkflowName,
+		}
+	}
+	return nil
 }
 
 func (d Dashboard) SelectedRepo() *state.RepoState {
@@ -245,8 +404,27 @@ func (d Dashboard) BodyView() string {
 		}
 	}
 
-	out += "\n" + hintStyle.Render("↑/↓ navigate  enter/space expand  o open  r refresh  m manage  q quit  ? help")
+	out += "\n" + d.hintLine()
 	return out
+}
+
+// hintLine renders the footer, which doubles as the re-run confirmation prompt
+// and result banner.
+func (d Dashboard) hintLine() string {
+	switch d.rerunStatus {
+	case rerunConfirming:
+		return confirmStyle.Render(fmt.Sprintf("re-run %s on %s?  [enter] confirm  [esc] cancel",
+			d.rerunTarget.workflow, d.rerunTarget.fullName()))
+	case rerunExecuting:
+		return hintStyle.Render(fmt.Sprintf("re-running %s…", d.rerunTarget.workflow))
+	case rerunShowResult:
+		if d.rerunFailure {
+			return errorStyle.Render(d.rerunMsg)
+		}
+		return successStyle.Render(d.rerunMsg)
+	default:
+		return hintStyle.Render("↑/↓ navigate  enter/space expand  f re-run  o open  r refresh  m manage  q quit  ? help")
+	}
 }
 
 func (d Dashboard) View() string {
