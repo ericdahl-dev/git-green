@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,9 +207,44 @@ func runInit(args []string) int {
 	return 0
 }
 
+// version is overwritten at build time via -ldflags "-X main.version=...".
+// goreleaser sets it from the git tag; a plain `go build` leaves it as "dev".
+var version = "dev"
+
+func helpText() string {
+	return `git-green — terminal dashboard for GitHub Actions CI status
+
+Usage:
+  git-green            launch the dashboard
+  git-green init       create a starter config
+  git-green --version  print the version
+  git-green --help     show this help
+`
+}
+
+// runCommand handles the non-TUI invocations. It reports whether args were
+// handled here, along with the exit code to use when they were. Anything it
+// does not recognise falls through to launching the dashboard.
+func runCommand(args []string, out io.Writer) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	switch args[0] {
+	case "init":
+		return runInit(args[1:]), true
+	case "help", "-help", "--help":
+		_, _ = fmt.Fprint(out, helpText())
+		return 0, true
+	case "version", "-version", "--version":
+		_, _ = fmt.Fprintf(out, "git-green %s\n", version)
+		return 0, true
+	}
+	return 0, false
+}
+
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "init" {
-		os.Exit(runInit(os.Args[2:]))
+	if code, handled := runCommand(os.Args[1:], os.Stdout); handled {
+		os.Exit(code)
 	}
 
 	cfg, err := config.Load(configPath())
