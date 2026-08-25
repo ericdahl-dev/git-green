@@ -3,6 +3,7 @@ package githubclient
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/google/go-github/v72/github"
 	"golang.org/x/oauth2"
@@ -42,8 +43,8 @@ type PRRun struct {
 
 // RepoData holds all CI data fetched in a single pass for a repo.
 type RepoData struct {
-	BranchRuns    []WorkflowRun
-	PRRuns        []PRRun
+	BranchRuns     []WorkflowRun
+	PRRuns         []PRRun
 	ResolvedBranch string // the branch that was actually queried
 }
 
@@ -53,6 +54,43 @@ type RepoQuery struct {
 	Name      string
 	Branch    string   // empty = use repo default branch
 	Workflows []string // nil = all workflows
+}
+
+// dependabotEvent is the event GitHub assigns to the runs Dependabot generates
+// for its own update jobs. Those runs are named after the update
+// ("npm_and_yarn in /. for axios, ...") rather than after a workflow, so they
+// never collapse in a name-keyed dedupe and can swamp a repo's branch section.
+const dependabotEvent = "dynamic"
+
+func newFilterSet(workflows []string) map[string]bool {
+	set := make(map[string]bool, len(workflows))
+	for _, wf := range workflows {
+		set[wf] = true
+	}
+	return set
+}
+
+// runKey returns the dedupe key for a run: the workflow ID, which is stable
+// across runs of the same workflow file. Falls back to the run name when
+// GitHub omits the ID.
+func runKey(run *github.WorkflowRun) string {
+	if id := run.GetWorkflowID(); id != 0 {
+		return strconv.FormatInt(id, 10)
+	}
+	return "name:" + run.GetName()
+}
+
+// keepRun reports whether a run belongs in the dashboard: Dependabot's own
+// update runs are dropped, and when the query names workflows only those are
+// kept.
+func keepRun(run *github.WorkflowRun, filterSet map[string]bool) bool {
+	if run.GetEvent() == dependabotEvent {
+		return false
+	}
+	if len(filterSet) > 0 && !filterSet[run.GetName()] {
+		return false
+	}
+	return true
 }
 
 // Client fetches CI data from GitHub.
@@ -133,26 +171,23 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 		return nil, "", fmt.Errorf("listing workflow runs for %s/%s: %w", q.Owner, q.Name, err)
 	}
 
-	filterSet := make(map[string]bool, len(q.Workflows))
-	for _, wf := range q.Workflows {
-		filterSet[wf] = true
-	}
+	filterSet := newFilterSet(q.Workflows)
 
-	// Keep only the most recent run per workflow name.
+	// Keep only the most recent run per workflow.
 	seen := make(map[string]bool)
 	var results []WorkflowRun
 	for _, run := range runs.WorkflowRuns {
-		name := run.GetName()
-		if len(filterSet) > 0 && !filterSet[name] {
+		if !keepRun(run, filterSet) {
 			continue
 		}
-		if seen[name] {
+		key := runKey(run)
+		if seen[key] {
 			continue
 		}
-		seen[name] = true
+		seen[key] = true
 
 		wr := WorkflowRun{
-			WorkflowName: name,
+			WorkflowName: run.GetName(),
 			Status:       run.GetStatus(),
 			Conclusion:   run.GetConclusion(),
 			HTMLURL:      run.GetHTMLURL(),
@@ -188,24 +223,21 @@ func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string) (
 		return nil, fmt.Errorf("listing workflow runs for sha %s in %s/%s: %w", sha, q.Owner, q.Name, err)
 	}
 
-	filterSet := make(map[string]bool, len(q.Workflows))
-	for _, wf := range q.Workflows {
-		filterSet[wf] = true
-	}
+	filterSet := newFilterSet(q.Workflows)
 
 	seen := make(map[string]bool)
 	var results []WorkflowRun
 	for _, run := range runs.WorkflowRuns {
-		name := run.GetName()
-		if len(filterSet) > 0 && !filterSet[name] {
+		if !keepRun(run, filterSet) {
 			continue
 		}
-		if seen[name] {
+		key := runKey(run)
+		if seen[key] {
 			continue
 		}
-		seen[name] = true
+		seen[key] = true
 		results = append(results, WorkflowRun{
-			WorkflowName: name,
+			WorkflowName: run.GetName(),
 			Status:       run.GetStatus(),
 			Conclusion:   run.GetConclusion(),
 			HTMLURL:      run.GetHTMLURL(),
