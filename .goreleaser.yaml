@@ -43,20 +43,30 @@ changelog:
       - Merge pull request
       - Merge branch
 
-brews:
+# Casks, not formulas: goreleaser deprecated `brews` in v2.10 and removes it
+# in v2.16, and the release workflow tracks "~> v2". Homebrew's cask support
+# targets macOS; on Linux use `go install` or the release tarballs.
+homebrew_casks:
   - name: git-green
-    directory: Formula
+    binaries:
+      - git-green
+    directory: Casks
     repository:
       owner: ericdahl-dev
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/ericdahl-dev/git-green"
     description: "Terminal dashboard for GitHub Actions CI status"
-    license: "MIT"
-    install: |
-      bin.install "git-green"
-    test: |
-      system "#{bin}/git-green", "--help"
+    url:
+      verified: "github.com/ericdahl-dev/git-green/"
+    # The released binaries are neither signed nor notarized, so Gatekeeper
+    # quarantines them on download and the cask will not launch without this.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/git-green"]
+          end
 
 release:
   github:
