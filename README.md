@@ -95,12 +95,18 @@ name = "your-repo"
 | `↑` / `k` | Navigate up |
 | `↓` / `j` | Navigate down |
 | `enter` / `space` | Expand / collapse repo or PR row |
+| `f` | Re-run the failed run on the selected row (`enter` confirms, `esc` cancels) |
 | `r` | Force refresh |
 | `o` | Open run in browser |
 | `m` | Open repo manager |
 | `q` | Quit |
 | `?` | Toggle help overlay |
 | `esc` | Close help overlay |
+
+`f` is the only key that writes to GitHub. It calls `rerun-failed-jobs` for the
+run, falling back to re-running the whole run when there are no individually
+failed jobs, so the token for that org needs `actions: write`. A read-only token
+gets a 403 and the error is shown in the footer.
 
 ### Repo manager (`m`)
 
