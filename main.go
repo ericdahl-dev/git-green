@@ -233,10 +233,10 @@ func runCommand(args []string, out io.Writer) (int, bool) {
 	case "init":
 		return runInit(args[1:]), true
 	case "help", "-help", "--help":
-		fmt.Fprint(out, helpText())
+		_, _ = fmt.Fprint(out, helpText())
 		return 0, true
 	case "version", "-version", "--version":
-		fmt.Fprintf(out, "git-green %s\n", version)
+		_, _ = fmt.Fprintf(out, "git-green %s\n", version)
 		return 0, true
 	}
 	return 0, false
