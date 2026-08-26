@@ -9,26 +9,24 @@ import (
 
 // PRState holds CI state for a single open pull request.
 type PRState struct {
-	Number     int
-	Title      string
-	HTMLURL    string
-	Stoplight  aggregator.Stoplight
-	Runs       []githubclient.WorkflowRun
-	Mergeable  string     // "clean", "conflicting", "unknown", or ""
-	StuckSince *time.Time // non-nil when a stuck condition was first detected
+	Number    int
+	Title     string
+	HTMLURL   string
+	Stoplight aggregator.Stoplight
+	Runs      []githubclient.WorkflowRun
+	Mergeable string // "clean", "conflicting", "unknown", or ""
 }
 
 // RepoState holds the current display state for a single Repo.
 type RepoState struct {
-	Owner      string
-	Name       string
-	Branch     string
-	Stoplight  aggregator.Stoplight
-	Runs       []githubclient.WorkflowRun
-	PRs        []PRState
-	StaleAt    *time.Time // non-nil when last fetch failed
-	Err        error      // last error, if any
-	StuckSince *time.Time // non-nil when a branch stuck condition was first detected
+	Owner     string
+	Name      string
+	Branch    string
+	Stoplight aggregator.Stoplight
+	Runs      []githubclient.WorkflowRun
+	PRs       []PRState
+	StaleAt   *time.Time // non-nil when last fetch failed
+	Err       error      // last error, if any
 }
 
 func (r RepoState) FullName() string {

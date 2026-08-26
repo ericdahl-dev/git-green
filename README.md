@@ -86,6 +86,42 @@ owner = "some-other-org"
 name = "your-repo"
 ```
 
+## Stuck alerts
+
+git-green POSTs a JSON event to each configured webhook when a branch or PR has
+been failing, stuck in progress, or conflicting for longer than
+`stuck_threshold_minutes` (default `30`):
+
+```toml
+[[webhooks]]
+url = "https://hooks.example.com/git-green"
+# secret = "shared-secret"   # optional; enables request signing
+```
+
+```json
+{
+  "event": "branch_stuck",
+  "reason": "prolonged_failure",
+  "repo": "your-org/your-repo",
+  "workflow": "CI",
+  "run_url": "https://github.com/your-org/your-repo/actions/runs/123",
+  "stuck_since": "2026-08-26T09:00:00Z",
+  "timestamp": "2026-08-26T09:31:00Z"
+}
+```
+
+`event` is `branch_stuck` or `pr_stuck`; `reason` is `prolonged_failure`,
+`prolonged_in_progress`, or `conflict`. A `pr_stuck` event also carries a `pr`
+object with `number`, `title`, and `url`.
+
+Each condition alerts **once**, on the first poll after it crosses the
+threshold — not on every cycle. Recovering re-arms it, so a repo that breaks
+again later alerts again. `stuck_since` is when the condition started, not when
+the alert fired.
+
+When a webhook has a `secret`, the request is signed with HMAC-SHA256 over the
+raw body and sent as `X-Git-Green-Signature: sha256=<hex>`.
+
 ## Keybindings
 
 ### Dashboard

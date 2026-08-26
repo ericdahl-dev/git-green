@@ -151,7 +151,7 @@ name = "git-green"
 	pollCh, stop := p.Start(ctx)
 	defer stop()
 
-	<-pollCh // first: success
+	<-pollCh          // first: success
 	stale := <-pollCh // second: error → stale
 	if !stale.Repos[0].IsStale() {
 		t.Fatal("expected stale after error")
@@ -259,52 +259,198 @@ func TestPRNotStuckWhenClean(t *testing.T) {
 	}
 }
 
-func TestDispatchStuckEventsFiredOnce(t *testing.T) {
-	var received []webhooks.Event
+// stuckPoller builds a Poller with a controllable clock and a webhook endpoint,
+// using a realistic 30-minute threshold rather than the zero threshold that a
+// hand-built config can have but config.Load can never produce.
+func stuckPoller(t *testing.T, received *[]webhooks.Event, now *time.Time) *Poller {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var evt webhooks.Event
 		if err := json.NewDecoder(r.Body).Decode(&evt); err == nil {
-			received = append(received, evt)
+			*received = append(*received, evt)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	cfg := &config.Config{}
-	cfg.Settings.StuckThresholdMinutes = 0 // fire immediately
+	cfg.Settings.StuckThresholdMinutes = 30
 	cfg.Webhooks = []config.Webhook{{URL: srv.URL}}
-	p := &Poller{cfg: cfg, dispatcher: webhooks.New(cfg.Webhooks)}
+	return &Poller{
+		cfg:        cfg,
+		dispatcher: webhooks.New(cfg.Webhooks),
+		stuck:      make(map[string]*stuckEntry),
+		now:        func() time.Time { return *now },
+	}
+}
 
-	// Simulate two consecutive polls both showing a failing branch.
-	// First poll: no previous state → fire event.
-	previous := []state.RepoState{
-		{Owner: "o", Name: "r"},
+// dispatch mirrors what fetch does: evaluate, then POST whatever came back.
+func (p *Poller) dispatchNow(repos []state.RepoState) {
+	for _, evt := range p.evaluateStuck(repos) {
+		p.dispatcher.Dispatch(evt)
 	}
-	current := []state.RepoState{
-		{
-			Owner: "o",
-			Name:  "r",
-			Runs:  []githubclient.WorkflowRun{{WorkflowName: "CI", Status: "completed", Conclusion: "failure"}},
-		},
-	}
-	p.dispatchStuckEvents(previous, current)
+}
 
-	// Second poll: previous has StuckSince set → should NOT fire again.
-	previous2 := current // StuckSince now set
-	current2 := []state.RepoState{
-		{
-			Owner: "o",
-			Name:  "r",
-			Runs:  []githubclient.WorkflowRun{{WorkflowName: "CI", Status: "completed", Conclusion: "failure"}},
-			StuckSince: current[0].StuckSince,
-		},
+func failingRepo() []state.RepoState {
+	return []state.RepoState{{
+		Owner: "o",
+		Name:  "r",
+		Runs:  []githubclient.WorkflowRun{{WorkflowName: "CI", Status: "completed", Conclusion: "failure"}},
+	}}
+}
+
+func TestStuckDoesNotFireBeforeThreshold(t *testing.T) {
+	var received []webhooks.Event
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	p := stuckPoller(t, &received, &now)
+
+	// Poll every 15s for 20 minutes. Nothing should fire before 30 minutes.
+	for i := 0; i < 80; i++ {
+		p.dispatchNow(failingRepo())
+		now = now.Add(15 * time.Second)
 	}
-	p.dispatchStuckEvents(previous2, current2)
+
+	if len(received) != 0 {
+		t.Fatalf("expected no events before the threshold, got %d", len(received))
+	}
+}
+
+func TestStuckFiresOnceAfterThreshold(t *testing.T) {
+	var received []webhooks.Event
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	p := stuckPoller(t, &received, &now)
+
+	first := now
+	// Two hours of 30s polls across the 30-minute threshold.
+	for i := 0; i < 240; i++ {
+		p.dispatchNow(failingRepo())
+		now = now.Add(30 * time.Second)
+	}
 
 	if len(received) != 1 {
-		t.Errorf("expected exactly 1 webhook event, got %d", len(received))
+		t.Fatalf("expected exactly 1 event, got %d", len(received))
 	}
-	if len(received) > 0 && received[0].Event != "branch_stuck" {
-		t.Errorf("expected branch_stuck, got %q", received[0].Event)
+	evt := received[0]
+	if evt.Event != "branch_stuck" {
+		t.Errorf("event = %q, want branch_stuck", evt.Event)
+	}
+	if evt.Reason != "prolonged_failure" {
+		t.Errorf("reason = %q, want prolonged_failure", evt.Reason)
+	}
+	if evt.Repo != "o/r" {
+		t.Errorf("repo = %q, want o/r", evt.Repo)
+	}
+	// StuckSince must be when the condition started, not when it alerted.
+	if !evt.StuckSince.Equal(first) {
+		t.Errorf("stuck_since = %v, want %v", evt.StuckSince, first)
+	}
+	if evt.Timestamp.Sub(evt.StuckSince) < 30*time.Minute {
+		t.Errorf("fired after %v, want at least the 30m threshold", evt.Timestamp.Sub(evt.StuckSince))
+	}
+}
+
+func TestStuckReArmsAfterRecovery(t *testing.T) {
+	var received []webhooks.Event
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	p := stuckPoller(t, &received, &now)
+
+	green := []state.RepoState{{
+		Owner: "o",
+		Name:  "r",
+		Runs:  []githubclient.WorkflowRun{{WorkflowName: "CI", Status: "completed", Conclusion: "success"}},
+	}}
+
+	// First incident: stuck long enough to alert.
+	for i := 0; i < 5; i++ {
+		p.dispatchNow(failingRepo())
+		now = now.Add(10 * time.Minute)
+	}
+	if len(received) != 1 {
+		t.Fatalf("first incident: expected 1 event, got %d", len(received))
+	}
+
+	// Recovers — the entry should be pruned.
+	p.dispatchNow(green)
+	if len(p.stuck) != 0 {
+		t.Fatalf("expected recovery to prune tracking, got %d entries", len(p.stuck))
+	}
+	now = now.Add(10 * time.Minute)
+
+	// Second incident: must alert again rather than staying silent.
+	for i := 0; i < 5; i++ {
+		p.dispatchNow(failingRepo())
+		now = now.Add(10 * time.Minute)
+	}
+	if len(received) != 2 {
+		t.Fatalf("second incident: expected 2 events total, got %d", len(received))
+	}
+}
+
+func TestStuckReasonChangeRestartsTheClock(t *testing.T) {
+	var received []webhooks.Event
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	p := stuckPoller(t, &received, &now)
+
+	inProgress := []state.RepoState{{
+		Owner: "o",
+		Name:  "r",
+		Runs:  []githubclient.WorkflowRun{{WorkflowName: "CI", Status: "in_progress"}},
+	}}
+
+	// 20 minutes in progress — under the threshold, nothing fires.
+	for i := 0; i < 2; i++ {
+		p.dispatchNow(inProgress)
+		now = now.Add(10 * time.Minute)
+	}
+	if len(received) != 0 {
+		t.Fatalf("expected nothing yet, got %d", len(received))
+	}
+
+	// It turns into a failure: a new condition, so the clock restarts and the
+	// 20 minutes already elapsed must not count toward the threshold.
+	p.dispatchNow(failingRepo())
+	if len(received) != 0 {
+		t.Fatalf("reason change should restart the clock, got %d events", len(received))
+	}
+	now = now.Add(31 * time.Minute)
+	p.dispatchNow(failingRepo())
+	if len(received) != 1 {
+		t.Fatalf("expected 1 event after the new condition aged out, got %d", len(received))
+	}
+	if received[0].Reason != "prolonged_failure" {
+		t.Errorf("reason = %q, want prolonged_failure", received[0].Reason)
+	}
+}
+
+func TestStuckPRFiresWithPRInfo(t *testing.T) {
+	var received []webhooks.Event
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	p := stuckPoller(t, &received, &now)
+
+	repos := []state.RepoState{{
+		Owner: "o",
+		Name:  "r",
+		PRs: []state.PRState{{
+			Number:    42,
+			Title:     "Add a thing",
+			HTMLURL:   "https://github.com/o/r/pull/42",
+			Mergeable: "dirty",
+		}},
+	}}
+
+	for i := 0; i < 5; i++ {
+		p.dispatchNow(repos)
+		now = now.Add(10 * time.Minute)
+	}
+
+	if len(received) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(received))
+	}
+	evt := received[0]
+	if evt.Event != "pr_stuck" || evt.Reason != "conflict" {
+		t.Errorf("got %q/%q, want pr_stuck/conflict", evt.Event, evt.Reason)
+	}
+	if evt.PR == nil || evt.PR.Number != 42 {
+		t.Fatalf("expected PR 42 in the event, got %+v", evt.PR)
 	}
 }

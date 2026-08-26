@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,6 +22,15 @@ type Fetcher interface {
 // ClientFactory creates a Fetcher for a given token.
 type ClientFactory func(token string) Fetcher
 
+// stuckEntry records when a single condition was first seen in a bad state and
+// whether its webhook has already fired, so a wedged repo alerts once rather
+// than on every poll cycle.
+type stuckEntry struct {
+	since   time.Time
+	reason  string
+	alerted bool
+}
+
 // Poller orchestrates periodic fetches across all configured repos.
 type Poller struct {
 	cfg        *config.Config
@@ -28,6 +38,11 @@ type Poller struct {
 	dispatcher *webhooks.Dispatcher
 	mu         sync.Mutex
 	current    []state.RepoState
+	// stuck is keyed by repo + condition (see stuckKey) and guarded by mu.
+	stuck map[string]*stuckEntry
+	// now is swappable in tests so threshold crossings can be exercised
+	// without waiting on the wall clock.
+	now func() time.Time
 }
 
 // New creates a Poller with the given config and client factory.
@@ -47,6 +62,8 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		factory:    factory,
 		dispatcher: webhooks.New(cfg.Webhooks),
 		current:    repos,
+		stuck:      make(map[string]*stuckEntry),
+		now:        time.Now,
 	}
 }
 
@@ -124,13 +141,16 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 
 	wg.Wait()
 
-	// Mutate results (StuckSince) before assigning to p.current so that
-	// concurrent Snapshot() calls never observe a partially-mutated slice.
-	p.dispatchStuckEvents(previous, results)
-
 	p.mu.Lock()
 	p.current = results
+	// Compute events under the lock (evaluateStuck mutates p.stuck), but POST
+	// them after releasing it so a hanging endpoint cannot stall Snapshot().
+	events := p.evaluateStuck(results)
 	p.mu.Unlock()
+
+	for _, evt := range events {
+		p.dispatcher.Dispatch(evt)
+	}
 
 	snap := state.New(results)
 	select {
@@ -210,133 +230,124 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 			prStatuses = append(prStatuses, aggregator.RunStatus(s))
 		}
 
-		// Carry forward StuckSince from the previous state for this PR.
-		var prevStuckSince *time.Time
-		for _, prevPR := range prev.PRs {
-			if prevPR.Number == pr.PR.Number {
-				prevStuckSince = prevPR.StuckSince
-				break
-			}
-		}
-
 		prStates = append(prStates, state.PRState{
-			Number:     pr.PR.Number,
-			Title:      pr.PR.Title,
-			HTMLURL:    pr.PR.HTMLURL,
-			Stoplight:  aggregator.Aggregate(prStatuses),
-			Runs:       pr.Runs,
-			Mergeable:  pr.PR.Mergeable,
-			StuckSince: prevStuckSince,
+			Number:    pr.PR.Number,
+			Title:     pr.PR.Title,
+			HTMLURL:   pr.PR.HTMLURL,
+			Stoplight: aggregator.Aggregate(prStatuses),
+			Runs:      pr.Runs,
+			Mergeable: pr.PR.Mergeable,
 		})
 	}
 
 	return state.RepoState{
-		Owner:      repo.Owner,
-		Name:       repo.Name,
-		Branch:     data.ResolvedBranch,
-		Stoplight:  aggregator.Aggregate(statuses),
-		Runs:       runs,
-		PRs:        prStates,
-		StaleAt:    nil,
-		Err:        nil,
-		StuckSince: prev.StuckSince,
+		Owner:     repo.Owner,
+		Name:      repo.Name,
+		Branch:    data.ResolvedBranch,
+		Stoplight: aggregator.Aggregate(statuses),
+		Runs:      runs,
+		PRs:       prStates,
+		StaleAt:   nil,
+		Err:       nil,
 	}
 }
 
-// dispatchStuckEvents compares previous and current repo states and fires
-// webhook events for newly-stuck conditions. Updates StuckSince in-place on
-// the current slice to track when each condition was first detected.
-func (p *Poller) dispatchStuckEvents(previous, current []state.RepoState) {
+// stuckKey identifies one stuck condition: a repo's default branch, or one of
+// its open PRs.
+func stuckKey(r state.RepoState, scope string) string {
+	return r.FullName() + "#" + scope
+}
+
+// evaluateStuck folds the freshly-polled state into the stuck bookkeeping and
+// returns the events that should fire this cycle.
+//
+// A condition alerts exactly once, on the first cycle where it has been bad for
+// at least the configured threshold. Recovering prunes the entry, so the next
+// incident re-arms. Callers must hold p.mu.
+func (p *Poller) evaluateStuck(repos []state.RepoState) []webhooks.Event {
 	threshold := time.Duration(p.cfg.Settings.StuckThresholdMinutes) * time.Minute
-	now := time.Now()
+	now := p.now()
+	seen := make(map[string]struct{}, len(p.stuck))
+	var events []webhooks.Event
 
-	for i := range current {
-		cur := &current[i]
-		var prev *state.RepoState
-		for j := range previous {
-			if previous[j].Owner == cur.Owner && previous[j].Name == cur.Name {
-				prev = &previous[j]
-				break
-			}
+	// track records one stuck condition and appends an event if this is the
+	// cycle that crosses the threshold.
+	track := func(key, reason string, build func(since time.Time) webhooks.Event) {
+		seen[key] = struct{}{}
+		entry, ok := p.stuck[key]
+		// A changed reason (an in-progress run turning into a failure) is a new
+		// condition, so restart the clock and allow a fresh alert.
+		if !ok || entry.reason != reason {
+			entry = &stuckEntry{since: now, reason: reason}
+			p.stuck[key] = entry
 		}
+		if entry.alerted || now.Sub(entry.since) < threshold {
+			return
+		}
+		entry.alerted = true
+		events = append(events, build(entry.since))
+	}
 
-		// --- Branch stuck detection ---
-		branchStuck, branchReason := p.branchStuckReason(cur)
-		if branchStuck {
-			if cur.StuckSince == nil {
-				t := now
-				cur.StuckSince = &t
-			}
-			// Only fire if this is newly stuck (previous had no StuckSince or was not stuck).
-			prevStuck := prev != nil && prev.StuckSince != nil
-			if !prevStuck && time.Since(*cur.StuckSince) >= threshold {
-				runURL := ""
-				workflow := ""
-				if len(cur.Runs) > 0 {
-					runURL = cur.Runs[0].HTMLURL
-					workflow = cur.Runs[0].WorkflowName
+	for i := range repos {
+		r := repos[i]
+
+		if stuck, reason := p.branchStuckReason(&r); stuck {
+			track(stuckKey(r, "branch"), reason, func(since time.Time) webhooks.Event {
+				runURL, workflow := "", ""
+				if len(r.Runs) > 0 {
+					runURL = r.Runs[0].HTMLURL
+					workflow = r.Runs[0].WorkflowName
 				}
-				p.dispatcher.Dispatch(webhooks.Event{
+				return webhooks.Event{
 					Event:      "branch_stuck",
-					Reason:     branchReason,
-					Repo:       cur.FullName(),
+					Reason:     reason,
+					Repo:       r.FullName(),
 					Workflow:   workflow,
 					RunURL:     runURL,
-					StuckSince: *cur.StuckSince,
+					StuckSince: since,
 					Timestamp:  now,
-				})
-			}
-		} else {
-			cur.StuckSince = nil
+				}
+			})
 		}
 
-		// --- PR stuck detection ---
-		for j := range cur.PRs {
-			pr := &cur.PRs[j]
-			var prevPR *state.PRState
-			if prev != nil {
-				for k := range prev.PRs {
-					if prev.PRs[k].Number == pr.Number {
-						prevPR = &prev.PRs[k]
-						break
-					}
-				}
+		for j := range r.PRs {
+			pr := r.PRs[j]
+			stuck, reason := p.prStuckReason(&pr)
+			if !stuck {
+				continue
 			}
-
-			prStuck, prReason := p.prStuckReason(pr)
-			if prStuck {
-				if pr.StuckSince == nil {
-					t := now
-					pr.StuckSince = &t
+			track(stuckKey(r, fmt.Sprintf("pr-%d", pr.Number)), reason, func(since time.Time) webhooks.Event {
+				runURL, workflow := "", ""
+				if len(pr.Runs) > 0 {
+					runURL = pr.Runs[0].HTMLURL
+					workflow = pr.Runs[0].WorkflowName
 				}
-				prevPRStuck := prevPR != nil && prevPR.StuckSince != nil
-				if !prevPRStuck && time.Since(*pr.StuckSince) >= threshold {
-					runURL := ""
-					workflow := ""
-					if len(pr.Runs) > 0 {
-						runURL = pr.Runs[0].HTMLURL
-						workflow = pr.Runs[0].WorkflowName
-					}
-					p.dispatcher.Dispatch(webhooks.Event{
-						Event:  "pr_stuck",
-						Reason: prReason,
-						Repo:   cur.FullName(),
-						PR: &webhooks.PRInfo{
-							Number: pr.Number,
-							Title:  pr.Title,
-							URL:    pr.HTMLURL,
-						},
-						Workflow:   workflow,
-						RunURL:     runURL,
-						StuckSince: *pr.StuckSince,
-						Timestamp:  now,
-					})
+				return webhooks.Event{
+					Event:  "pr_stuck",
+					Reason: reason,
+					Repo:   r.FullName(),
+					PR: &webhooks.PRInfo{
+						Number: pr.Number,
+						Title:  pr.Title,
+						URL:    pr.HTMLURL,
+					},
+					Workflow:   workflow,
+					RunURL:     runURL,
+					StuckSince: since,
+					Timestamp:  now,
 				}
-			} else {
-				pr.StuckSince = nil
-			}
+			})
 		}
 	}
+
+	// Conditions that recovered stop being tracked, which re-arms them.
+	for key := range p.stuck {
+		if _, ok := seen[key]; !ok {
+			delete(p.stuck, key)
+		}
+	}
+
+	return events
 }
 
 // branchStuckReason returns whether the branch is stuck and why.
