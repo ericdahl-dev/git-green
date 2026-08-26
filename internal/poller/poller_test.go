@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/go-github/v72/github"
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	"github.com/ericdahl-dev/git-green/internal/config"
@@ -452,5 +455,130 @@ func TestStuckPRFiresWithPRInfo(t *testing.T) {
 	}
 	if evt.PR == nil || evt.PR.Number != 42 {
 		t.Fatalf("expected PR 42 in the event, got %+v", evt.PR)
+	}
+}
+
+// recordingFetcher captures the queries it was asked to run, so a test can
+// assert what detail the poller requested.
+type recordingFetcher struct {
+	mu      sync.Mutex
+	queries []githubclient.RepoQuery
+	err     error
+}
+
+func (f *recordingFetcher) FetchAll(_ context.Context, q githubclient.RepoQuery) (githubclient.RepoData, error) {
+	f.mu.Lock()
+	f.queries = append(f.queries, q)
+	f.mu.Unlock()
+	if f.err != nil {
+		return githubclient.RepoData{}, f.err
+	}
+	return githubclient.RepoData{ResolvedBranch: "main"}, nil
+}
+
+func (f *recordingFetcher) last() githubclient.RepoQuery {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queries[len(f.queries)-1]
+}
+
+func recordingPoller(t *testing.T, f *recordingFetcher) *Poller {
+	t.Helper()
+	cfg := writeConfig(t, `
+[[repos]]
+owner = "o"
+name = "r"
+`)
+	return New(cfg, func(string) Fetcher { return f })
+}
+
+func TestCollapsedRepoDoesNotRequestDetail(t *testing.T) {
+	f := &recordingFetcher{}
+	p := recordingPoller(t, f)
+
+	ch := make(chan state.Snapshot, 1)
+	p.fetch(context.Background(), ch)
+
+	if got := f.last(); got.Detail {
+		t.Error("collapsed repo requested job and PR-run detail")
+	}
+}
+
+func TestExpandedRepoRequestsDetail(t *testing.T) {
+	f := &recordingFetcher{}
+	p := recordingPoller(t, f)
+	p.SetExpandedRepos([]string{"o/r"})
+
+	ch := make(chan state.Snapshot, 1)
+	p.fetch(context.Background(), ch)
+
+	if got := f.last(); !got.Detail {
+		t.Error("expanded repo did not request detail")
+	}
+
+	// Collapsing it again drops back to the cheap query.
+	p.SetExpandedRepos(nil)
+	p.fetch(context.Background(), ch)
+	if got := f.last(); got.Detail {
+		t.Error("collapsing did not stop detail fetching")
+	}
+}
+
+func TestResolvedBranchSurvivesAnError(t *testing.T) {
+	f := &recordingFetcher{}
+	p := recordingPoller(t, f)
+
+	ch := make(chan state.Snapshot, 1)
+	p.fetch(context.Background(), ch) // resolves "main"
+
+	// Now every fetch fails. The resolved branch must be carried forward, so
+	// the next query still names it rather than asking GitHub to resolve the
+	// default branch again.
+	f.err = errors.New("boom")
+	p.fetch(context.Background(), ch)
+
+	if got := f.last().Branch; got != "main" {
+		t.Errorf("branch after error = %q, want main to be preserved", got)
+	}
+	if p.Snapshot().Repos[0].Branch != "main" {
+		t.Errorf("state lost the resolved branch: %q", p.Snapshot().Repos[0].Branch)
+	}
+}
+
+func TestRateLimitBacksOffUntilReset(t *testing.T) {
+	f := &recordingFetcher{}
+	p := recordingPoller(t, f)
+
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+
+	reset := now.Add(30 * time.Minute)
+	f.err = &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: reset}}}
+
+	ch := make(chan state.Snapshot, 1)
+	p.fetch(context.Background(), ch)
+	after := len(f.queries)
+	if after != 1 {
+		t.Fatalf("expected the first poll to reach the API, got %d calls", after)
+	}
+
+	// While rate limited, polling must not touch the API at all.
+	for i := 0; i < 5; i++ {
+		now = now.Add(time.Minute)
+		p.fetch(context.Background(), ch)
+	}
+	if len(f.queries) != after {
+		t.Errorf("made %d calls while rate limited, want none after the first", len(f.queries)-after)
+	}
+	if err := p.Snapshot().Repos[0].Err; err == nil {
+		t.Error("expected the rate limit to surface as an error on the row")
+	}
+
+	// Past the reset it resumes.
+	now = reset.Add(time.Second)
+	f.err = nil
+	p.fetch(context.Background(), ch)
+	if len(f.queries) != after+1 {
+		t.Error("did not resume polling after the reset time")
 	}
 }

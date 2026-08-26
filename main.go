@@ -102,6 +102,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenDashboard
 		return m, nil
 
+	case ui.ExpandedReposMsg:
+		// A row opened or closed: the poller now needs a different amount of
+		// detail for that repo, so refresh instead of waiting for the tick.
+		m.poller.SetExpandedRepos(msg.Repos)
+		m.fetching = true
+		m.poller.ForceRefresh(m.pollCtx, m.pollChWrite)
+		cmds = append(cmds, kickSpinner(m.spinner))
+		return m, tea.Batch(cmds...)
+
 	case ui.ConfigChangedMsg:
 		m.cfg = msg.Config
 		m.poller.ReloadConfig(m.cfg, m.pollCtx, m.pollChWrite)

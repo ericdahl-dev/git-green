@@ -273,3 +273,29 @@ func TestRerunTargetEmptyDashboard(t *testing.T) {
 		t.Errorf("target = %+v, want nil on an empty dashboard", target)
 	}
 }
+
+// Expansion is keyed by "owner/name", not by slice index, so re-sorting the
+// snapshot (which happens whenever a stoplight changes) cannot transfer an
+// open row onto a different repo.
+func TestExpansionSurvivesReordering(t *testing.T) {
+	green := state.RepoState{Owner: "o", Name: "green", Stoplight: aggregator.StoplightGreen}
+	red := state.RepoState{Owner: "o", Name: "red", Stoplight: aggregator.StoplightRed}
+
+	d := NewDashboard(state.New([]state.RepoState{green, red}))
+	d.repoExp["o/red"] = true
+
+	if got := d.ExpandedRepos(); len(got) != 1 || got[0] != "o/red" {
+		t.Fatalf("ExpandedRepos = %v, want [o/red]", got)
+	}
+
+	// Reverse the order, as a stoplight change would.
+	d.snapshot = state.New([]state.RepoState{red, green})
+	d.rows = d.buildRows()
+
+	if !d.repoExp["o/red"] {
+		t.Error("o/red lost its expansion after reordering")
+	}
+	if d.repoExp["o/green"] {
+		t.Error("o/green became expanded after reordering")
+	}
+}

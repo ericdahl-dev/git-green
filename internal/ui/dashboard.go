@@ -83,6 +83,15 @@ const (
 	kindPR
 )
 
+// stackKey identifies an expanded stack. It carries the repo name rather than
+// its index because a repo's index moves when the config reloads or the
+// active-first sort shifts, which would otherwise reassign expansion state to
+// whatever repo landed on that index.
+type stackKey struct {
+	repo  string
+	stack int
+}
+
 type flatRow struct {
 	kind     rowKind
 	repoIdx  int
@@ -95,8 +104,8 @@ type Dashboard struct {
 	snapshot      state.Snapshot
 	rows          []flatRow
 	cursor        int
-	repoExp       map[int]bool
-	stackExp      map[[2]int]bool // {repoIdx, stack number}
+	repoExp       map[string]bool
+	stackExp      map[stackKey]bool
 	prExp         map[[2]int]bool
 	groups        map[int][]prGroup // repoIdx -> its PR groups, rebuilt with rows
 	lastActivity  time.Time
@@ -127,8 +136,8 @@ func (d Dashboard) AwaitingConfirm() bool {
 func NewDashboard(snap state.Snapshot) Dashboard {
 	d := Dashboard{
 		snapshot:     snap,
-		repoExp:      make(map[int]bool),
-		stackExp:     make(map[[2]int]bool),
+		repoExp:      make(map[string]bool),
+		stackExp:     make(map[stackKey]bool),
 		prExp:        make(map[[2]int]bool),
 		lastActivity: time.Now(),
 	}
@@ -169,7 +178,7 @@ func (d *Dashboard) buildRows() []flatRow {
 		groups := groupPRs(r.PRs)
 		d.groups[i] = groups
 		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
-		if !d.repoExp[i] {
+		if !d.repoExp[r.FullName()] {
 			continue
 		}
 		for gi, g := range groups {
@@ -178,7 +187,7 @@ func (d *Dashboard) buildRows() []flatRow {
 				continue
 			}
 			rows = append(rows, flatRow{kind: kindStack, repoIdx: i, groupIdx: gi})
-			if !d.stackExp[[2]int{i, g.stackNum}] {
+			if !d.stackExp[stackKey{repo: r.FullName(), stack: g.stackNum}] {
 				continue
 			}
 			for _, j := range g.prIdxs {
@@ -187,6 +196,28 @@ func (d *Dashboard) buildRows() []flatRow {
 		}
 	}
 	return rows
+}
+
+// ExpandedReposMsg carries the repos whose rows are currently open, so the
+// poller can fetch job and PR-run detail for those and skip it elsewhere.
+type ExpandedReposMsg struct {
+	Repos []string
+}
+
+// ExpandedRepos returns the "owner/name" of every currently expanded repo.
+func (d Dashboard) ExpandedRepos() []string {
+	var out []string
+	for name, open := range d.repoExp {
+		if open {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func expandedChangedCmd(repos []string) tea.Cmd {
+	return func() tea.Msg { return ExpandedReposMsg{Repos: repos} }
 }
 
 func selectionTimeoutCmd() tea.Cmd {
@@ -236,17 +267,24 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 			row := d.rows[d.cursor]
 			switch row.kind {
 			case kindRepo:
-				d.repoExp[row.repoIdx] = !d.repoExp[row.repoIdx]
+				key := d.snapshot.Repos[row.repoIdx].FullName()
+				d.repoExp[key] = !d.repoExp[key]
 				d.rows = d.buildRows()
 				if d.cursor >= len(d.rows) {
 					d.cursor = len(d.rows) - 1
 				}
+				// Expanding a repo asks for detail the poller was not
+				// fetching, so tell it and refresh rather than leaving the
+				// row empty until the next tick.
+				return d, tea.Batch(selectionTimeoutCmd(), expandedChangedCmd(d.ExpandedRepos()))
 			case kindStack:
 				g := d.group(row)
 				if g == nil {
 					break
 				}
-				key := [2]int{row.repoIdx, g.stackNum}
+				// A stack's members live under an already-expanded repo, so
+				// their detail is on hand — no refetch needed here.
+				key := stackKey{repo: d.snapshot.Repos[row.repoIdx].FullName(), stack: g.stackNum}
 				d.stackExp[key] = !d.stackExp[key]
 				d.rows = d.buildRows()
 				if d.cursor >= len(d.rows) {
@@ -410,7 +448,7 @@ func (d Dashboard) BodyView() string {
 
 		switch row.kind {
 		case kindRepo:
-			expanded := d.repoExp[row.repoIdx]
+			expanded := d.repoExp[r.FullName()]
 			triangle := "▶"
 			if expanded {
 				triangle = "▼"
@@ -431,7 +469,7 @@ func (d Dashboard) BodyView() string {
 				break
 			}
 			tri := "▶"
-			if d.stackExp[[2]int{row.repoIdx, g.stackNum}] {
+			if d.stackExp[stackKey{repo: r.FullName(), stack: g.stackNum}] {
 				tri = "▼"
 			}
 			line := prIndent + tri + " " + g.title()

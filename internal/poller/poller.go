@@ -2,9 +2,12 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/google/go-github/v72/github"
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	"github.com/ericdahl-dev/git-green/internal/config"
@@ -40,6 +43,13 @@ type Poller struct {
 	current    []state.RepoState
 	// stuck is keyed by repo + condition (see stuckKey) and guarded by mu.
 	stuck map[string]*stuckEntry
+	// expanded holds the "owner/name" of repos whose rows are open in the UI.
+	// Only those fetch per-run jobs and per-PR runs; see RepoQuery.Detail.
+	expanded map[string]bool
+	// rateLimitedUntil records, per org, when GitHub said the quota resets.
+	// Polling that org is skipped until then rather than spending every cycle
+	// collecting 403s.
+	rateLimitedUntil map[string]time.Time
 	// now is swappable in tests so threshold crossings can be exercised
 	// without waiting on the wall clock.
 	now func() time.Time
@@ -58,13 +68,74 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		}
 	}
 	return &Poller{
-		cfg:        cfg,
-		factory:    factory,
-		dispatcher: webhooks.New(cfg.Webhooks),
-		current:    repos,
-		stuck:      make(map[string]*stuckEntry),
-		now:        time.Now,
+		cfg:              cfg,
+		factory:          factory,
+		dispatcher:       webhooks.New(cfg.Webhooks),
+		current:          repos,
+		stuck:            make(map[string]*stuckEntry),
+		expanded:         make(map[string]bool),
+		rateLimitedUntil: make(map[string]time.Time),
+		now:              time.Now,
 	}
+}
+
+// SetExpandedRepos records which repo rows are open in the UI, as
+// "owner/name". Expanded repos fetch the job and PR-run detail their rows
+// render; collapsed ones skip it.
+func (p *Poller) SetExpandedRepos(names []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.expanded = make(map[string]bool, len(names))
+	for _, n := range names {
+		p.expanded[n] = true
+	}
+}
+
+func (p *Poller) isExpanded(owner, name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.expanded[owner+"/"+name]
+}
+
+// rateLimitPause reports how long an org is still rate-limited for, and clears
+// the entry once it has elapsed.
+func (p *Poller) rateLimitPause(org string) (time.Duration, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until, ok := p.rateLimitedUntil[org]
+	if !ok {
+		return 0, false
+	}
+	if remaining := until.Sub(p.now()); remaining > 0 {
+		return remaining, true
+	}
+	delete(p.rateLimitedUntil, org)
+	return 0, false
+}
+
+// noteRateLimit records a reset time reported by GitHub so subsequent polls
+// for that org back off instead of burning cycles on 403s.
+func (p *Poller) noteRateLimit(org string, err error) {
+	var rlErr *github.RateLimitError
+	var abuseErr *github.AbuseRateLimitError
+	var until time.Time
+	switch {
+	case errors.As(err, &rlErr):
+		until = rlErr.Rate.Reset.Time
+	case errors.As(err, &abuseErr):
+		if abuseErr.RetryAfter != nil {
+			until = p.now().Add(*abuseErr.RetryAfter)
+		}
+	default:
+		return
+	}
+	if until.IsZero() {
+		return
+	}
+	p.mu.Lock()
+	p.rateLimitedUntil[org] = until
+	p.mu.Unlock()
+	logx.Debug("rate limited", "org", org, "until", until)
 }
 
 // Snapshot returns an immutable view of the current (possibly initial) state.
@@ -162,47 +233,52 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 
 func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.RepoState) state.RepoState {
 	logx.Debug("fetch repo", "owner", repo.Owner, "name", repo.Name)
-	token, err := p.cfg.TokenForOrg(repo.Owner)
-	if err != nil {
+	// Keep whatever branch was already resolved. Falling back to the config
+	// value (often empty) would throw the resolution away on every error and
+	// force another Repositories.Get next cycle — most expensive exactly when
+	// the API is already refusing us.
+	resolved := repo.Branch
+	if resolved == "" {
+		resolved = prev.Branch
+	}
+
+	stale := func(err error) state.RepoState {
 		now := time.Now()
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,
-			Branch:    repo.Branch,
+			Branch:    resolved,
 			Stoplight: prev.Stoplight,
 			Runs:      prev.Runs,
 			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
 		}
+	}
+
+	if pause, limited := p.rateLimitPause(repo.Owner); limited {
+		return stale(fmt.Errorf("rate limited for %s; retrying in %s", repo.Owner, pause.Round(time.Second)))
+	}
+
+	token, err := p.cfg.TokenForOrg(repo.Owner)
+	if err != nil {
+		return stale(err)
 	}
 
 	client := p.factory(token)
 	// Use the previously-resolved branch so we avoid a Repositories.Get call every poll.
-	branch := repo.Branch
-	if branch == "" {
-		branch = prev.Branch
-	}
 	q := githubclient.RepoQuery{
 		Owner:     repo.Owner,
 		Name:      repo.Name,
-		Branch:    branch,
+		Branch:    resolved,
 		Workflows: repo.Workflows,
+		Detail:    p.isExpanded(repo.Owner, repo.Name),
 	}
 
 	data, err := client.FetchAll(ctx, q)
 	if err != nil {
-		now := time.Now()
-		return state.RepoState{
-			Owner:     repo.Owner,
-			Name:      repo.Name,
-			Branch:    repo.Branch,
-			Stoplight: prev.Stoplight,
-			Runs:      prev.Runs,
-			PRs:       prev.PRs,
-			StaleAt:   &now,
-			Err:       err,
-		}
+		p.noteRateLimit(repo.Owner, err)
+		return stale(err)
 	}
 
 	runs := data.BranchRuns
