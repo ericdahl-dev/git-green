@@ -26,10 +26,26 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 brew install ericdahl-dev/tap/git-green
 ```
 
+As of v0.2.0, git-green is published as a Homebrew **cask** rather than a formula — GoReleaser removed the formula config this project used. New installs need no change. If you installed before v0.2.0 you are on the old formula, which is frozen and no longer receives updates; move across once with:
+
+```bash
+brew uninstall git-green
+brew install --cask ericdahl-dev/tap/git-green
+```
+
 ### Go
 
 ```bash
 go install github.com/ericdahl-dev/git-green@latest
+```
+
+## Usage
+
+```bash
+git-green            # launch the dashboard
+git-green init       # write a starter config
+git-green --version  # print the version
+git-green --help     # show usage
 ```
 
 ## First-time config
