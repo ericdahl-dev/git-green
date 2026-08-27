@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ericdahl-dev/git-green/internal/logx"
+	"github.com/ericdahl-dev/git-green/internal/ratelimit"
 	"github.com/google/go-github/v72/github"
 	"golang.org/x/oauth2"
 )
@@ -51,6 +52,32 @@ type RepoData struct {
 	BranchRuns     []WorkflowRun
 	PRRuns         []PRRun
 	ResolvedBranch string // the branch that was actually queried
+	// Calls is how many REST requests this fetch made, and Budget is what
+	// GitHub last reported was left. Together they let the poller pace itself
+	// against the token's hourly allowance.
+	Calls  int
+	Budget ratelimit.Budget
+}
+
+// fetchStats accumulates the call count and the newest budget reading across
+// one FetchAll.
+type fetchStats struct {
+	calls  int
+	budget ratelimit.Budget
+}
+
+// observe records one API response. GitHub reports the budget on every
+// response, so the last one seen is the freshest reading.
+func (s *fetchStats) observe(resp *github.Response) {
+	s.calls++
+	if resp == nil || resp.Rate.Limit == 0 {
+		return
+	}
+	s.budget = ratelimit.Budget{
+		Remaining: resp.Rate.Remaining,
+		Limit:     resp.Rate.Limit,
+		Reset:     resp.Rate.Reset.Time,
+	}
 }
 
 // RepoQuery describes what to fetch for a single repo.
@@ -133,17 +160,20 @@ func New(token string) *Client {
 // A repo with 4 workflows and 11 open PRs therefore costs 2 calls collapsed
 // and 17 REST plus 1 GraphQL expanded. No ListWorkflows call in either case.
 func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
+	var stats fetchStats
+
 	// Fetch the latest run per workflow on the default/configured branch.
-	branchRuns, resolvedBranch, err := c.fetchBranchRuns(ctx, q)
+	branchRuns, resolvedBranch, err := c.fetchBranchRuns(ctx, q, &stats)
 	if err != nil {
 		return RepoData{}, err
 	}
 
 	// Fetch open PRs — 1 call.
-	prs, _, err := c.gh.PullRequests.List(ctx, q.Owner, q.Name, &github.PullRequestListOptions{
+	prs, resp, err := c.gh.PullRequests.List(ctx, q.Owner, q.Name, &github.PullRequestListOptions{
 		State:       "open",
 		ListOptions: github.ListOptions{PerPage: 50},
 	})
+	stats.observe(resp)
 	if err != nil {
 		return RepoData{}, fmt.Errorf("listing PRs for %s/%s: %w", q.Owner, q.Name, err)
 	}
@@ -178,7 +208,7 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		}
 		var runs []WorkflowRun
 		if q.Detail {
-			runs, err = c.fetchRunsForRef(ctx, q, sha)
+			runs, err = c.fetchRunsForRef(ctx, q, sha, &stats)
 			if err != nil {
 				return RepoData{}, fmt.Errorf("PR #%d: %w", p.Number, err)
 			}
@@ -186,27 +216,35 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		prRuns = append(prRuns, PRRun{PR: p, Runs: runs})
 	}
 
-	return RepoData{BranchRuns: branchRuns, PRRuns: prRuns, ResolvedBranch: resolvedBranch}, nil
+	return RepoData{
+		BranchRuns:     branchRuns,
+		PRRuns:         prRuns,
+		ResolvedBranch: resolvedBranch,
+		Calls:          stats.calls,
+		Budget:         stats.budget,
+	}, nil
 }
 
 // fetchBranchRuns returns the latest run per workflow on the branch, then
 // fetches jobs for each. Uses ListRepositoryWorkflowRuns (1 call) instead of
 // ListWorkflows + per-workflow queries.
 // Returns the runs, the resolved branch name, and any error.
-func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRun, string, error) {
+func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery, stats *fetchStats) ([]WorkflowRun, string, error) {
 	branch := q.Branch
 	if branch == "" {
-		repo, _, err := c.gh.Repositories.Get(ctx, q.Owner, q.Name)
+		repo, resp, err := c.gh.Repositories.Get(ctx, q.Owner, q.Name)
+		stats.observe(resp)
 		if err != nil {
 			return nil, "", fmt.Errorf("getting default branch for %s/%s: %w", q.Owner, q.Name, err)
 		}
 		branch = repo.GetDefaultBranch()
 	}
 
-	runs, _, err := c.gh.Actions.ListRepositoryWorkflowRuns(ctx, q.Owner, q.Name, &github.ListWorkflowRunsOptions{
+	runs, resp, err := c.gh.Actions.ListRepositoryWorkflowRuns(ctx, q.Owner, q.Name, &github.ListWorkflowRunsOptions{
 		Branch:      branch,
 		ListOptions: github.ListOptions{PerPage: 100},
 	})
+	stats.observe(resp)
 	if err != nil {
 		return nil, "", fmt.Errorf("listing workflow runs for %s/%s: %w", q.Owner, q.Name, err)
 	}
@@ -237,7 +275,8 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 		// Jobs are only rendered under an expanded repo row, and cost one call
 		// per run, so they are fetched only when that detail is on screen.
 		if q.Detail {
-			jobs, _, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
+			jobs, jobsResp, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
+			stats.observe(jobsResp)
 			if err != nil {
 				return nil, "", fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
 			}
@@ -257,11 +296,12 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 // fetchRunsForRef returns the latest run per workflow for a given head SHA.
 // Uses ListRepositoryWorkflowRuns filtered by HeadSHA (1 call) — no jobs
 // fetched for PRs to keep API usage low.
-func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string) ([]WorkflowRun, error) {
-	runs, _, err := c.gh.Actions.ListRepositoryWorkflowRuns(ctx, q.Owner, q.Name, &github.ListWorkflowRunsOptions{
+func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string, stats *fetchStats) ([]WorkflowRun, error) {
+	runs, resp, err := c.gh.Actions.ListRepositoryWorkflowRuns(ctx, q.Owner, q.Name, &github.ListWorkflowRunsOptions{
 		HeadSHA:     sha,
 		ListOptions: github.ListOptions{PerPage: 100},
 	})
+	stats.observe(resp)
 	if err != nil {
 		return nil, fmt.Errorf("listing workflow runs for sha %s in %s/%s: %w", sha, q.Owner, q.Name, err)
 	}

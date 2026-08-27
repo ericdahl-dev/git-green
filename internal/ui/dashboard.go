@@ -413,6 +413,9 @@ func (d Dashboard) rowRuns(row flatRow) []githubclient.WorkflowRun {
 	}
 }
 
+// Throttles reports the tokens the poller has slowed down, for the title bar.
+func (d Dashboard) Throttles() []state.Throttle { return d.snapshot.Throttles }
+
 func (d Dashboard) SelectedRepo() *state.RepoState {
 	if len(d.rows) == 0 {
 		return nil

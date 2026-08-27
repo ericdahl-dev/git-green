@@ -14,6 +14,7 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 - **Active-first sorting** — in-progress and failing repos/PRs bubble to the top automatically
 - **Inline expand/collapse** — navigate with `↑`/`↓`, toggle any row with `enter`/`space`
 - **Auto-polling** — refreshes every 15 seconds (configurable); retains last-known status on API errors
+- **Adaptive pacing** — watches each token's GitHub REST budget and stretches the poll interval only as far as it must to last the hour, keeping a reserve for your other tools
 - **In-TUI repo management** — add, edit, delete, and enable/disable repos without leaving the terminal
 - **Multi-org** — per-org token config with `gh auth token` fallback
 - **Single binary** — no runtime, no dependencies

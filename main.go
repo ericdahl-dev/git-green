@@ -186,7 +186,7 @@ func (m model) View() string {
 	if m.showHelp {
 		return ui.RenderHelp(m.winWidth)
 	}
-	title := ui.TitleLine(m.fetching, m.spinner.View())
+	title := ui.TitleLine(m.fetching, m.spinner.View(), m.dashboard.Throttles())
 	switch m.screen {
 	case screenManage:
 		return title + m.manage.View()
