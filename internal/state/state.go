@@ -45,10 +45,23 @@ func (r RepoState) IsStale() bool {
 	return r.StaleAt != nil
 }
 
+// Throttle reports one token polling slower than configured because its REST
+// budget is running down.
+type Throttle struct {
+	Orgs      []string
+	Remaining int
+	Limit     int
+	Reset     time.Time
+	Interval  time.Duration
+}
+
 // Snapshot is an immutable view of all repo states at a point in time.
 type Snapshot struct {
 	Repos     []RepoState
 	UpdatedAt time.Time
+	// Throttles lists tokens currently paced below the configured interval.
+	// Empty is the healthy case.
+	Throttles []Throttle
 }
 
 // New creates a fresh Snapshot from a slice of RepoStates.

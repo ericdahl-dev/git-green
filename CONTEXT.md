@@ -114,7 +114,45 @@ Each poll cycle makes the following API calls per enabled Repo:
 
 Disabled Repos are skipped entirely — no API calls are made for them.
 
+A failed fetch retains the last known status and marks the Repo stale. A Repo
+skipped by **Pacing** is not stale — nothing failed, it is simply not due yet.
+
 _Avoid_: refresh, sync, watch
+
+## Pacing
+
+The adjustment of poll frequency to a token's remaining GitHub REST budget.
+GitHub reports the budget on every response (`x-ratelimit-remaining`,
+`-reset`), so the Poller always knows how much is left and when the window
+resets.
+
+Rather than polling flat-out until a 403 and then going dark for the rest of
+the hour, the Poller spreads what is left across the time remaining:
+
+```
+spendable  = remaining - Reserve
+affordable = spendable / cost per cycle
+interval   = max(configured, time to reset / affordable)
+```
+
+- **Reserve**: 100 calls per token that git-green never spends. A token is
+  usually shared with `gh` and other tooling, and polling it to zero takes
+  those down too. When not even one cycle is affordable, the Poller waits out
+  the window rather than dipping into the Reserve.
+- **Cost per cycle** is measured, not assumed — every fetch reports how many
+  REST calls it made. Expanding a Repo raises it (see the Polling call list),
+  so the pace re-prices itself each cycle.
+- **Scoped to the token, not the Org.** Orgs sharing a token share one budget,
+  so they are paced together; pacing them separately would spend it twice.
+- A healthy token is never held back: while there is budget to spare the
+  formula lands below the configured interval, and the configured one wins.
+
+When a token is paced below its configured interval, the title bar says so —
+which Org, how much budget is left, the pace, and when it recovers. Healthy
+tokens show nothing.
+
+_Avoid_: throttling (use Pacing), backoff, rate limiting (that is GitHub's
+403, which Pacing exists to avoid)
 
 ## Keybindings
 
