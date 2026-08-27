@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -65,6 +66,12 @@ type stackResponse struct {
 // error, and an error here only costs the stack grouping, so callers treat it
 // as "no stacks" rather than failing the whole repo.
 func (c *Client) fetchStacks(ctx context.Context, owner, name string) (map[int]Stack, error) {
+	// A Client assembled without the GraphQL transport — as tests of the REST
+	// paths do — simply has no stack support.
+	if c.http == nil || c.graphQLURL == "" {
+		return nil, errors.New("no GraphQL transport configured")
+	}
+
 	body, err := json.Marshal(map[string]any{
 		"query":     stackQuery,
 		"variables": map[string]string{"owner": owner, "name": name},

@@ -59,6 +59,12 @@ type RepoQuery struct {
 	Name      string
 	Branch    string   // empty = use repo default branch
 	Workflows []string // nil = all workflows
+	// Detail requests the per-run job lists and the per-PR workflow runs.
+	// Both are only rendered when a repo row is expanded, and both cost one
+	// API call each — per workflow and per open PR respectively — so a
+	// collapsed repo skips them and costs two calls per poll instead of
+	// two plus the size of the repo.
+	Detail bool
 }
 
 // dependabotEvent is the event GitHub assigns to the runs Dependabot generates
@@ -113,14 +119,19 @@ func New(token string) *Client {
 	return &Client{gh: github.NewClient(tc), http: tc, graphQLURL: graphQLEndpoint}
 }
 
-// FetchAll fetches branch runs and open-PR runs with minimal API calls:
+// FetchAll fetches branch runs and open-PR runs with minimal API calls.
+//
+// Collapsed (q.Detail false) — 2 calls, regardless of repo size:
 //   - 1 call for branch runs (ListRepositoryWorkflowRuns filtered by branch)
 //   - 1 call to list open PRs
-//   - 1 call per PR for its runs (filtered by head SHA)
-//   - 1 call per branch workflow run to fetch jobs
-//   - 1 GraphQL call for stack membership, only when 2+ PRs are open
 //
-// No ListWorkflows call at all.
+// Expanded (q.Detail true) adds the detail the dashboard actually renders:
+//   - 1 call per branch workflow run to fetch jobs
+//   - 1 call per PR for its runs (filtered by head SHA)
+//   - 1 GraphQL call for stack membership, when 2+ PRs are open
+//
+// A repo with 4 workflows and 11 open PRs therefore costs 2 calls collapsed
+// and 17 REST plus 1 GraphQL expanded. No ListWorkflows call in either case.
 func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 	// Fetch the latest run per workflow on the default/configured branch.
 	branchRuns, resolvedBranch, err := c.fetchBranchRuns(ctx, q)
@@ -137,10 +148,11 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		return RepoData{}, fmt.Errorf("listing PRs for %s/%s: %w", q.Owner, q.Name, err)
 	}
 
-	// A stack needs at least two PRs, so a repo below that is not worth the
-	// extra call. A failure here costs only the grouping, never the CI data.
+	// Stack rows only render under an expanded repo, and a stack needs at
+	// least two PRs, so anything else is not worth the extra call. A failure
+	// here costs only the grouping, never the CI data.
 	var stacks map[int]Stack
-	if len(prs) > 1 {
+	if q.Detail && len(prs) > 1 {
 		fetched, err := c.fetchStacks(ctx, q.Owner, q.Name)
 		if err != nil {
 			logx.Debug("stacks unavailable", "repo", q.Owner+"/"+q.Name, "err", err)
@@ -149,7 +161,8 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		}
 	}
 
-	// Fetch latest run per workflow for each PR head SHA — 1 call per PR.
+	// Fetch latest run per workflow for each PR head SHA — 1 call per PR,
+	// and only when the repo row is expanded.
 	var prRuns []PRRun
 	for _, pr := range prs {
 		sha := pr.GetHead().GetSHA()
@@ -163,9 +176,12 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		if st, ok := stacks[p.Number]; ok {
 			p.Stack = &st
 		}
-		runs, err := c.fetchRunsForRef(ctx, q, sha)
-		if err != nil {
-			return RepoData{}, fmt.Errorf("PR #%d: %w", p.Number, err)
+		var runs []WorkflowRun
+		if q.Detail {
+			runs, err = c.fetchRunsForRef(ctx, q, sha)
+			if err != nil {
+				return RepoData{}, fmt.Errorf("PR #%d: %w", p.Number, err)
+			}
 		}
 		prRuns = append(prRuns, PRRun{PR: p, Runs: runs})
 	}
@@ -218,17 +234,20 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery) ([]WorkflowRu
 			RunID:        run.GetID(),
 		}
 
-		// Fetch jobs for branch runs so we can show them expanded.
-		jobs, _, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
-		if err != nil {
-			return nil, "", fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
-		}
-		for _, j := range jobs.Jobs {
-			wr.Jobs = append(wr.Jobs, Job{
-				Name:       j.GetName(),
-				Status:     j.GetStatus(),
-				Conclusion: j.GetConclusion(),
-			})
+		// Jobs are only rendered under an expanded repo row, and cost one call
+		// per run, so they are fetched only when that detail is on screen.
+		if q.Detail {
+			jobs, _, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
+			if err != nil {
+				return nil, "", fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
+			}
+			for _, j := range jobs.Jobs {
+				wr.Jobs = append(wr.Jobs, Job{
+					Name:       j.GetName(),
+					Status:     j.GetStatus(),
+					Conclusion: j.GetConclusion(),
+				})
+			}
 		}
 		results = append(results, wr)
 	}
