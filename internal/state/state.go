@@ -14,7 +14,8 @@ type PRState struct {
 	HTMLURL   string
 	Stoplight aggregator.Stoplight
 	Runs      []githubclient.WorkflowRun
-	Mergeable string // "clean", "conflicting", "unknown", or ""
+	Mergeable string              // "clean", "conflicting", "unknown", or ""
+	Stack     *githubclient.Stack // non-nil when the PR is part of a stack
 }
 
 // RepoState holds the current display state for a single Repo.

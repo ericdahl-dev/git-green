@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/ericdahl-dev/git-green/internal/logx"
 	"github.com/google/go-github/v72/github"
 	"golang.org/x/oauth2"
 )
@@ -35,6 +37,7 @@ type PR struct {
 	HeadSHA   string
 	HTMLURL   string
 	Mergeable string // "clean", "conflicting", "unknown", or "" if not yet computed
+	Stack     *Stack // non-nil when the PR is part of a stack
 }
 
 // PRRun groups an open PR with its workflow runs.
@@ -97,14 +100,17 @@ func keepRun(run *github.WorkflowRun, filterSet map[string]bool) bool {
 
 // Client fetches CI data from GitHub.
 type Client struct {
-	gh *github.Client
+	gh   *github.Client
+	http *http.Client // same auth as gh, used for the GraphQL stack query
+	// graphQLURL is a field so tests can point it at a stub server.
+	graphQLURL string
 }
 
 // New creates a Client authenticated with the given token.
 func New(token string) *Client {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(context.Background(), ts)
-	return &Client{gh: github.NewClient(tc)}
+	return &Client{gh: github.NewClient(tc), http: tc, graphQLURL: graphQLEndpoint}
 }
 
 // FetchAll fetches branch runs and open-PR runs with minimal API calls:
@@ -112,6 +118,7 @@ func New(token string) *Client {
 //   - 1 call to list open PRs
 //   - 1 call per PR for its runs (filtered by head SHA)
 //   - 1 call per branch workflow run to fetch jobs
+//   - 1 GraphQL call for stack membership, only when 2+ PRs are open
 //
 // No ListWorkflows call at all.
 func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
@@ -130,6 +137,18 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		return RepoData{}, fmt.Errorf("listing PRs for %s/%s: %w", q.Owner, q.Name, err)
 	}
 
+	// A stack needs at least two PRs, so a repo below that is not worth the
+	// extra call. A failure here costs only the grouping, never the CI data.
+	var stacks map[int]Stack
+	if len(prs) > 1 {
+		fetched, err := c.fetchStacks(ctx, q.Owner, q.Name)
+		if err != nil {
+			logx.Debug("stacks unavailable", "repo", q.Owner+"/"+q.Name, "err", err)
+		} else {
+			stacks = fetched
+		}
+	}
+
 	// Fetch latest run per workflow for each PR head SHA — 1 call per PR.
 	var prRuns []PRRun
 	for _, pr := range prs {
@@ -140,6 +159,9 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 			HeadSHA:   sha,
 			HTMLURL:   pr.GetHTMLURL(),
 			Mergeable: pr.GetMergeableState(),
+		}
+		if st, ok := stacks[p.Number]; ok {
+			p.Stack = &st
 		}
 		runs, err := c.fetchRunsForRef(ctx, q, sha)
 		if err != nil {

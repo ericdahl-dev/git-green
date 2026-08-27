@@ -24,6 +24,9 @@ _Avoid_: organisation, account
 **PR**: An open GitHub Pull Request within a Repo. The dashboard shows each open PR as an expandable row with its own Stoplight, derived from Workflow Runs on that PR's head SHA.
 _Avoid_: pull request (use PR), change, diff
 
+**Stack**: A GitHub stacked-PR group — an ordered chain of PRs, each based on the one below it, rooted on a trunk branch. GitHub numbers Stacks out of the same counter as PRs, so a Stack number sits alongside the PR numbers it holds (PR #271 lives in Stack #272). Created with `gh stack`. The dashboard renders a Stack as one collapsible row between the Repo and its PR rows.
+_Avoid_: chain, series, stacked PRs (use Stack)
+
 **Branch section**: The default/configured-branch CI rows rendered above PR rows when a Repo is expanded. Shows the latest Run per Workflow for the tracked branch.
 
 **Config file**: The user-managed file at `~/.config/git-green/config.toml` that lists which Repos to watch and any per-Org token overrides. Can be edited directly or managed via the in-TUI Repo manager.
@@ -39,6 +42,8 @@ _Avoid_: settings screen, config editor
 - A **Run** has one or more **Jobs**
 - A **Job** has one or more **Steps**
 - A **PR** has a head SHA; the dashboard fetches the latest Run per Workflow for that SHA
+- A **PR** belongs to at most one **Stack**; a **Stack** holds two or more **PRs** in a fixed bottom-to-top order
+- A **Stack** keeps counting **PRs** that have already merged, so its size can exceed the number of open **PRs** the dashboard shows
 - A **Repo** may be **disabled** (`enabled = false`), in which case it is excluded from all Poller activity and makes no API calls
 
 ## Example dialogue
@@ -64,7 +69,9 @@ _Avoid_: badge, indicator, light
 
 ## Active-first sorting
 
-Repos and PRs are sorted by Stoplight priority so the most actionable items appear at the top: 🟡 in-progress → 🔴 failing → 🟢 passing → ⚪ no signal. Order is stable within each tier.
+Repos, Stacks, and PRs are sorted by Stoplight priority so the most actionable items appear at the top: 🟡 in-progress → 🔴 failing → 🟢 passing → ⚪ no signal. Order is stable within each tier.
+
+**Stacks are the exception.** Members of a Stack always render bottom-to-top, in the order they have to merge, because reordering them by Stoplight would hide that order. The Stack as a whole still sorts active-first against other Stacks and standalone PRs.
 _Avoid_: bubbling, floating
 
 ## Dashboard tree
@@ -77,15 +84,19 @@ The Dashboard renders a two-level expandable tree:
       branch: main
           ●  CI
              ●  test
+      ▼ 🔴  stack #272 · 4 PRs · wse-1937-id-search
+            ▶ 🟢  1/4  PR #268 · feat: parse ids
+            ▶ 🔴  2/4  PR #270 · feat: export rows
       ▶ 🟡  PR #7 · feat: something
       ▼ 🔴  PR #3 · fix: auth bug
             ✗  CI
                ✗  test
 ```
 
-- **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section then PR rows.
+- **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section, then Stack rows and standalone PR rows.
 - **Branch section**: non-navigable; always rendered above PR rows when a Repo is expanded.
-- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs.
+- **Stack row**: navigable; expand/collapse with `enter`/`space` to show its member PR rows. Its Stoplight is the most actionable of its members', and `f` and `o` act on the first failing member so a collapsed Stack still exposes what broke.
+- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`.
 
 _Avoid_: detail view, drill-down screen
 
@@ -97,6 +108,7 @@ Each poll cycle makes the following API calls per enabled Repo:
 - 1 × `Repositories.Get` (first poll only, when no branch is configured — result cached)
 - 1 × `ListRepositoryWorkflowRuns` (branch runs)
 - 1 × `PullRequests.List`
+- 1 × GraphQL query for Stack membership, only when 2+ PRs are open (a Stack needs at least two). A failure here costs only the grouping — PRs still render, ungrouped.
 - 1 × `ListRepositoryWorkflowRuns` per open PR (head SHA runs)
 - 1 × `ListWorkflowJobs` per branch Workflow Run
 
@@ -112,7 +124,7 @@ _Avoid_: refresh, sync, watch
 |---|---|
 | `↑` / `k` | Navigate up |
 | `↓` / `j` | Navigate down |
-| `enter` / `space` | Expand/collapse Repo or PR row |
+| `enter` / `space` | Expand/collapse Repo, Stack, or PR row |
 | `f` | Re-run the failed Workflow Run on the selected row (`enter` confirms, `esc` cancels) |
 | `r` | Force refresh |
 | `o` | Open run in browser |

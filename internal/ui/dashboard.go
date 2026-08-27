@@ -24,6 +24,7 @@ var (
 	wfStyle       = lipgloss.NewStyle().Faint(false)
 	branchIndent  = "      "
 	prIndent      = "      "
+	stackPRIndent = "            "
 	wfIndent      = "          "
 	jobIndent     = "              "
 )
@@ -78,13 +79,16 @@ type rowKind int
 
 const (
 	kindRepo rowKind = iota
+	kindStack
 	kindPR
 )
 
 type flatRow struct {
-	kind    rowKind
-	repoIdx int
-	prIdx   int // only for kindPR
+	kind     rowKind
+	repoIdx  int
+	prIdx    int  // only for kindPR
+	groupIdx int  // index into the repo's prGroups, for kindStack and stacked kindPR
+	inStack  bool // kindPR rendered inside an expanded stack
 }
 
 type Dashboard struct {
@@ -92,7 +96,9 @@ type Dashboard struct {
 	rows          []flatRow
 	cursor        int
 	repoExp       map[int]bool
+	stackExp      map[[2]int]bool // {repoIdx, stack number}
 	prExp         map[[2]int]bool
+	groups        map[int][]prGroup // repoIdx -> its PR groups, rebuilt with rows
 	lastActivity  time.Time
 	selectionFade bool
 
@@ -122,6 +128,7 @@ func NewDashboard(snap state.Snapshot) Dashboard {
 	d := Dashboard{
 		snapshot:     snap,
 		repoExp:      make(map[int]bool),
+		stackExp:     make(map[[2]int]bool),
 		prExp:        make(map[[2]int]bool),
 		lastActivity: time.Now(),
 	}
@@ -143,7 +150,7 @@ func stoplightPriority(s aggregator.Stoplight) int {
 	}
 }
 
-func (d Dashboard) buildRows() []flatRow {
+func (d *Dashboard) buildRows() []flatRow {
 	// Build sorted repo index order: yellow first, then red, green, grey.
 	repoOrder := make([]int, len(d.snapshot.Repos))
 	for i := range repoOrder {
@@ -155,23 +162,27 @@ func (d Dashboard) buildRows() []flatRow {
 		return pa < pb
 	})
 
+	d.groups = make(map[int][]prGroup, len(d.snapshot.Repos))
 	var rows []flatRow
 	for _, i := range repoOrder {
 		r := d.snapshot.Repos[i]
+		groups := groupPRs(r.PRs)
+		d.groups[i] = groups
 		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
-		if d.repoExp[i] {
-			// Sort PRs: yellow first, then red, green, grey.
-			prOrder := make([]int, len(r.PRs))
-			for j := range prOrder {
-				prOrder[j] = j
+		if !d.repoExp[i] {
+			continue
+		}
+		for gi, g := range groups {
+			if !g.isStack() {
+				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: g.prIdxs[0], groupIdx: gi})
+				continue
 			}
-			sort.SliceStable(prOrder, func(a, b int) bool {
-				pa := stoplightPriority(r.PRs[prOrder[a]].Stoplight)
-				pb := stoplightPriority(r.PRs[prOrder[b]].Stoplight)
-				return pa < pb
-			})
-			for _, j := range prOrder {
-				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j})
+			rows = append(rows, flatRow{kind: kindStack, repoIdx: i, groupIdx: gi})
+			if !d.stackExp[[2]int{i, g.stackNum}] {
+				continue
+			}
+			for _, j := range g.prIdxs {
+				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j, groupIdx: gi, inStack: true})
 			}
 		}
 	}
@@ -226,6 +237,17 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 			switch row.kind {
 			case kindRepo:
 				d.repoExp[row.repoIdx] = !d.repoExp[row.repoIdx]
+				d.rows = d.buildRows()
+				if d.cursor >= len(d.rows) {
+					d.cursor = len(d.rows) - 1
+				}
+			case kindStack:
+				g := d.group(row)
+				if g == nil {
+					break
+				}
+				key := [2]int{row.repoIdx, g.stackNum}
+				d.stackExp[key] = !d.stackExp[key]
 				d.rows = d.buildRows()
 				if d.cursor >= len(d.rows) {
 					d.cursor = len(d.rows) - 1
@@ -302,14 +324,7 @@ func (d Dashboard) selectedRerunTarget() *rerunTarget {
 	}
 	row := d.rows[d.cursor]
 	repo := d.snapshot.Repos[row.repoIdx]
-	runs := repo.Runs
-	if row.kind == kindPR {
-		if row.prIdx >= len(repo.PRs) {
-			return nil
-		}
-		runs = repo.PRs[row.prIdx].Runs
-	}
-	for _, run := range runs {
+	for _, run := range d.rowRuns(row) {
 		if !runFailed(run) || run.RunID == 0 {
 			continue
 		}
@@ -321,6 +336,43 @@ func (d Dashboard) selectedRerunTarget() *rerunTarget {
 		}
 	}
 	return nil
+}
+
+// group returns the prGroup a stack row or stacked PR row belongs to.
+func (d Dashboard) group(row flatRow) *prGroup {
+	groups := d.groups[row.repoIdx]
+	if row.groupIdx >= len(groups) {
+		return nil
+	}
+	return &groups[row.groupIdx]
+}
+
+// rowRuns returns the workflow runs a row stands for. A stack row stands for
+// every run across its members, bottom to top, so re-running and opening from a
+// collapsed stack still reach the layer that needs attention.
+func (d Dashboard) rowRuns(row flatRow) []githubclient.WorkflowRun {
+	repo := d.snapshot.Repos[row.repoIdx]
+	switch row.kind {
+	case kindStack:
+		g := d.group(row)
+		if g == nil {
+			return nil
+		}
+		var runs []githubclient.WorkflowRun
+		for _, j := range g.prIdxs {
+			if j < len(repo.PRs) {
+				runs = append(runs, repo.PRs[j].Runs...)
+			}
+		}
+		return runs
+	case kindPR:
+		if row.prIdx >= len(repo.PRs) {
+			return nil
+		}
+		return repo.PRs[row.prIdx].Runs
+	default:
+		return repo.Runs
+	}
 }
 
 func (d Dashboard) SelectedRepo() *state.RepoState {
@@ -337,23 +389,11 @@ func (d Dashboard) SelectedRunURL() string {
 	if len(d.rows) == 0 {
 		return ""
 	}
-	row := d.rows[d.cursor]
-	repo := d.snapshot.Repos[row.repoIdx]
-	switch row.kind {
-	case kindPR:
-		if row.prIdx >= len(repo.PRs) {
-			return ""
-		}
-		pr := repo.PRs[row.prIdx]
-		if len(pr.Runs) > 0 {
-			return pr.Runs[0].HTMLURL
-		}
-	default:
-		if len(repo.Runs) > 0 {
-			return repo.Runs[0].HTMLURL
-		}
+	runs := d.rowRuns(d.rows[d.cursor])
+	if len(runs) == 0 {
+		return ""
 	}
-	return ""
+	return runs[0].HTMLURL
 }
 
 // BodyView renders the dashboard without the app title (the root model prepends title and spinner).
@@ -385,6 +425,22 @@ func (d Dashboard) BodyView() string {
 				out += renderBranchSection(r)
 			}
 
+		case kindStack:
+			g := d.group(row)
+			if g == nil {
+				break
+			}
+			tri := "▶"
+			if d.stackExp[[2]int{row.repoIdx, g.stackNum}] {
+				tri = "▼"
+			}
+			line := prIndent + tri + " " + g.title()
+			if selected {
+				out += selectedStyle.Render(line) + "\n"
+			} else {
+				out += normalStyle.Render(line) + "\n"
+			}
+
 		case kindPR:
 			pr := r.PRs[row.prIdx]
 			prExpanded := d.prExp[[2]int{row.repoIdx, row.prIdx}]
@@ -392,14 +448,20 @@ func (d Dashboard) BodyView() string {
 			if prExpanded {
 				tri = "▼"
 			}
-			line := fmt.Sprintf("%s  PR #%d · %s", pr.Stoplight.String(), pr.Number, pr.Title)
+			indent := prIndent
+			position := ""
+			if row.inStack {
+				indent = stackPRIndent
+				position = fmt.Sprintf("%d/%d  ", pr.Stack.Position, pr.Stack.Size)
+			}
+			line := fmt.Sprintf("%s  %sPR #%d · %s", pr.Stoplight.String(), position, pr.Number, pr.Title)
 			if selected {
-				out += selectedStyle.Render(prIndent+tri+" "+line) + "\n"
+				out += selectedStyle.Render(indent+tri+" "+line) + "\n"
 			} else {
-				out += normalStyle.Render(prIndent+tri+" "+line) + "\n"
+				out += normalStyle.Render(indent+tri+" "+line) + "\n"
 			}
 			if prExpanded {
-				out += renderPRRuns(pr)
+				out += renderPRRuns(pr, indent+"    ")
 			}
 		}
 	}
@@ -457,17 +519,18 @@ func renderBranchSection(r state.RepoState) string {
 	return out
 }
 
-func renderPRRuns(pr state.PRState) string {
+func renderPRRuns(pr state.PRState, indent string) string {
 	if len(pr.Runs) == 0 {
-		return staleStyle.Render(wfIndent+"no runs") + "\n"
+		return staleStyle.Render(indent+"no runs") + "\n"
 	}
+	jobIndent := indent + "    "
 	out := ""
 	for _, run := range pr.Runs {
 		status := run.Conclusion
 		if status == "" {
 			status = run.Status
 		}
-		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", indent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
 		for _, job := range run.Jobs {
 			jobStatus := job.Conclusion
 			if jobStatus == "" {
