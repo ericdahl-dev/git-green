@@ -237,6 +237,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 			Stoplight: aggregator.Aggregate(prStatuses),
 			Runs:      pr.Runs,
 			Mergeable: pr.PR.Mergeable,
+			Stack:     pr.PR.Stack,
 		})
 	}
 
