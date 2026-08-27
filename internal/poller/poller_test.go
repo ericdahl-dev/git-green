@@ -476,15 +476,26 @@ func (f *recordingFetcher) FetchAll(_ context.Context, q githubclient.RepoQuery)
 	return githubclient.RepoData{ResolvedBranch: "main"}, nil
 }
 
-func (f *recordingFetcher) last() githubclient.RepoQuery {
+func (f *recordingFetcher) last(t *testing.T) githubclient.RepoQuery {
+	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.queries) == 0 {
+		t.Fatal("the fetcher was never called")
+	}
 	return f.queries[len(f.queries)-1]
 }
 
+// The org needs an explicit token: without one the poller falls back to
+// `gh auth token`, so the test would pass on a developer's authenticated
+// machine and fail in CI, where there is no gh login.
 func recordingPoller(t *testing.T, f *recordingFetcher) *Poller {
 	t.Helper()
 	cfg := writeConfig(t, `
+[[orgs]]
+name = "o"
+token = "test-token"
+
 [[repos]]
 owner = "o"
 name = "r"
@@ -499,7 +510,7 @@ func TestCollapsedRepoDoesNotRequestDetail(t *testing.T) {
 	ch := make(chan state.Snapshot, 1)
 	p.fetch(context.Background(), ch)
 
-	if got := f.last(); got.Detail {
+	if got := f.last(t); got.Detail {
 		t.Error("collapsed repo requested job and PR-run detail")
 	}
 }
@@ -512,14 +523,14 @@ func TestExpandedRepoRequestsDetail(t *testing.T) {
 	ch := make(chan state.Snapshot, 1)
 	p.fetch(context.Background(), ch)
 
-	if got := f.last(); !got.Detail {
+	if got := f.last(t); !got.Detail {
 		t.Error("expanded repo did not request detail")
 	}
 
 	// Collapsing it again drops back to the cheap query.
 	p.SetExpandedRepos(nil)
 	p.fetch(context.Background(), ch)
-	if got := f.last(); got.Detail {
+	if got := f.last(t); got.Detail {
 		t.Error("collapsing did not stop detail fetching")
 	}
 }
@@ -537,7 +548,7 @@ func TestResolvedBranchSurvivesAnError(t *testing.T) {
 	f.err = errors.New("boom")
 	p.fetch(context.Background(), ch)
 
-	if got := f.last().Branch; got != "main" {
+	if got := f.last(t).Branch; got != "main" {
 		t.Errorf("branch after error = %q, want main to be preserved", got)
 	}
 	if p.Snapshot().Repos[0].Branch != "main" {
