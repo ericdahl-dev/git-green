@@ -31,7 +31,7 @@ _Avoid_: chain, series, stacked PRs (use Stack)
 
 **Config file**: The user-managed file at `~/.config/git-green/config.toml` that lists which Repos to watch and any per-Org token overrides. Can be edited directly or managed via the in-TUI Repo manager.
 
-**Repo manager**: The in-TUI CRUD screen (key: `m`) for adding, editing, deleting, and toggling Repos. Changes are written to the Config file immediately and the Poller reloads automatically.
+**Repo manager**: The in-TUI CRUD screen (key: `m`) for adding, editing, deleting, and toggling Repos. A Repo is entered as `owner/name` or a pasted GitHub URL. Changes are written to the Config file immediately and the Poller reloads automatically.
 _Avoid_: settings screen, config editor
 
 ## Relationships

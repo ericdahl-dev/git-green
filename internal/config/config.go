@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -228,4 +229,49 @@ func WriteStarter(path, owner, name, branch string) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
+}
+
+var repoSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// ParseRepoRef extracts owner and name from "owner/name" or any GitHub URL
+// pointing at a repo: https, ssh, git@ form, with or without ".git" and with
+// any trailing path such as /pull/42 or /tree/main.
+func ParseRepoRef(s string) (owner, name string, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", "", fmt.Errorf("enter owner/name or a GitHub URL")
+	}
+
+	path := s
+	if rest, ok := strings.CutPrefix(s, "git@"); ok {
+		host, p, found := strings.Cut(rest, ":")
+		if !found || !isGitHubHost(host) {
+			return "", "", fmt.Errorf("not a GitHub repo: %s", s)
+		}
+		path = p
+	} else if strings.Contains(s, "://") || strings.HasPrefix(s, "github.com/") || strings.HasPrefix(s, "www.github.com/") {
+		if !strings.Contains(s, "://") {
+			s = "https://" + s
+		}
+		u, perr := url.Parse(s)
+		if perr != nil || !isGitHubHost(u.Hostname()) {
+			return "", "", fmt.Errorf("not a GitHub repo URL: %s", s)
+		}
+		path = u.Path
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("expected owner/name, got %q", strings.TrimSpace(path))
+	}
+	owner, name = parts[0], strings.TrimSuffix(parts[1], ".git")
+	if !repoSegment.MatchString(owner) || !repoSegment.MatchString(name) {
+		return "", "", fmt.Errorf("invalid owner/name: %s/%s", owner, name)
+	}
+	return owner, name, nil
+}
+
+func isGitHubHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "github.com" || host == "www.github.com"
 }

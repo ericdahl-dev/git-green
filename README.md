@@ -174,6 +174,8 @@ gets a 403 and the error is shown in the footer.
 | `d` | Delete repo |
 | `esc` | Back to dashboard |
 
+The add/edit form takes `owner/name` or a pasted GitHub URL (`https://github.com/owner/name`, `git@github.com:owner/name.git`, or any page inside the repo such as `/pull/42`). `git-green init` accepts the same.
+
 Changes are written to `config.toml` immediately and the poller reloads automatically. Disabled repos make no API calls.
 
 ## Troubleshooting
