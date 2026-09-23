@@ -420,3 +420,47 @@ name = "r"
 		t.Error("toggled state not persisted to disk")
 	}
 }
+
+func TestParseRepoRef(t *testing.T) {
+	ok := []struct{ in, owner, name string }{
+		{"ericdahl-dev/git-green", "ericdahl-dev", "git-green"},
+		{"  ericdahl-dev/git-green  ", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green/", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green.git", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green/pull/42", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green/tree/main", "ericdahl-dev", "git-green"},
+		{"https://github.com/ericdahl-dev/git-green?tab=readme", "ericdahl-dev", "git-green"},
+		{"http://www.github.com/ericdahl-dev/git-green", "ericdahl-dev", "git-green"},
+		{"github.com/ericdahl-dev/git-green", "ericdahl-dev", "git-green"},
+		{"git@github.com:ericdahl-dev/git-green.git", "ericdahl-dev", "git-green"},
+		{"ssh://git@github.com/ericdahl-dev/git-green.git", "ericdahl-dev", "git-green"},
+		{"owner/repo.name_1", "owner", "repo.name_1"},
+	}
+	for _, tc := range ok {
+		owner, name, err := ParseRepoRef(tc.in)
+		if err != nil {
+			t.Errorf("ParseRepoRef(%q) error: %v", tc.in, err)
+			continue
+		}
+		if owner != tc.owner || name != tc.name {
+			t.Errorf("ParseRepoRef(%q) = %q/%q, want %q/%q", tc.in, owner, name, tc.owner, tc.name)
+		}
+	}
+
+	bad := []string{
+		"",
+		"   ",
+		"git-green",
+		"https://github.com/ericdahl-dev",
+		"https://gitlab.com/ericdahl-dev/git-green",
+		"owner/repo with space",
+		"/git-green",
+		"owner/.git",
+	}
+	for _, in := range bad {
+		if _, _, err := ParseRepoRef(in); err == nil {
+			t.Errorf("ParseRepoRef(%q) expected error", in)
+		}
+	}
+}

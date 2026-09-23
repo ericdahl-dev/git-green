@@ -1,10 +1,8 @@
 package wizard
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/ericdahl-dev/git-green/internal/config"
@@ -19,29 +17,18 @@ func RunInteractive(path string, force bool) error {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", path)
 	}
 
-	var owner, name, branch string
+	var repo, branch string
 	branch = "main"
 
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("GitHub owner").
-				Description("Organization or user that owns the repository.").
-				Value(&owner).
+				Title("Repository").
+				Description("owner/name, or paste a GitHub URL.").
+				Value(&repo).
 				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("owner is required")
-					}
-					return nil
-				}),
-			huh.NewInput().
-				Title("Repository name").
-				Value(&name).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("repository name is required")
-					}
-					return nil
+					_, _, err := config.ParseRepoRef(s)
+					return err
 				}),
 			huh.NewInput().
 				Title("Branch").
@@ -54,5 +41,9 @@ func RunInteractive(path string, force bool) error {
 		return err
 	}
 
+	owner, name, err := config.ParseRepoRef(repo)
+	if err != nil {
+		return err
+	}
 	return config.WriteStarter(path, owner, name, branch)
 }

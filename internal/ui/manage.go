@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -25,7 +24,7 @@ const (
 
 // Manage is a Bubble Tea component for CRUD management of repos.
 //
-// fOwner, fName, and fBranch are heap-allocated so that huh form fields hold
+// fRepo and fBranch are heap-allocated so that huh form fields hold
 // stable pointers even when the Manage value is copied during the Bubble Tea
 // update cycle.
 type Manage struct {
@@ -36,18 +35,16 @@ type Manage struct {
 	editIdx int // -1 = add, >=0 = edit index
 	err     string
 
-	fOwner  *string
-	fName   *string
+	fRepo   *string
 	fBranch *string
 }
 
 func NewManage(cfg *config.Config) Manage {
-	owner, name, branch := "", "", ""
+	repo, branch := "", ""
 	return Manage{
 		cfg:     cfg,
 		editIdx: -1,
-		fOwner:  &owner,
-		fName:   &name,
+		fRepo:   &repo,
 		fBranch: &branch,
 	}
 }
@@ -82,8 +79,7 @@ func (m Manage) updateList(msg tea.Msg) (Manage, tea.Cmd) {
 			if len(repos) > 0 {
 				r := repos[m.cursor]
 				m.editIdx = m.cursor
-				*m.fOwner = r.Owner
-				*m.fName = r.Name
+				*m.fRepo = r.Owner + "/" + r.Name
 				*m.fBranch = r.Branch
 				m.form = m.buildForm("Edit repo")
 				m.mode = manageModeForm
@@ -91,8 +87,7 @@ func (m Manage) updateList(msg tea.Msg) (Manage, tea.Cmd) {
 			}
 		case "a":
 			m.editIdx = -1
-			*m.fOwner = ""
-			*m.fName = ""
+			*m.fRepo = ""
 			*m.fBranch = ""
 			m.form = m.buildForm("Add repo")
 			m.mode = manageModeForm
@@ -130,8 +125,8 @@ func (m Manage) updateForm(msg tea.Msg) (Manage, tea.Cmd) {
 	}
 
 	if m.form.State == huh.StateCompleted {
-		owner := strings.TrimSpace(*m.fOwner)
-		name := strings.TrimSpace(*m.fName)
+		// Validate already accepted the value, so this cannot fail.
+		owner, name, _ := config.ParseRepoRef(*m.fRepo)
 		branch := strings.TrimSpace(*m.fBranch)
 
 		if m.editIdx >= 0 {
@@ -190,23 +185,12 @@ func (m Manage) buildForm(title string) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("Owner").
-				Description("GitHub org or user").
-				Value(m.fOwner).
+				Title("Repo").
+				Description("owner/name, or paste a GitHub URL").
+				Value(m.fRepo).
 				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("owner is required")
-					}
-					return nil
-				}),
-			huh.NewInput().
-				Title("Repo name").
-				Value(m.fName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("repo name is required")
-					}
-					return nil
+					_, _, err := config.ParseRepoRef(s)
+					return err
 				}),
 			huh.NewInput().
 				Title("Branch").
