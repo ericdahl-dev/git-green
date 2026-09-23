@@ -105,6 +105,7 @@ type Dashboard struct {
 	rows          []flatRow
 	cursor        int
 	repoExp       map[string]bool
+	attention     map[string]bool // last seen needsAttention per repo, for auto-expand
 	stackExp      map[stackKey]bool
 	prExp         map[[2]int]bool
 	groups        map[int][]prGroup // repoIdx -> its PR groups, rebuilt with rows
@@ -137,6 +138,7 @@ func NewDashboard(snap state.Snapshot) Dashboard {
 	d := Dashboard{
 		snapshot:     snap,
 		repoExp:      make(map[string]bool),
+		attention:    make(map[string]bool),
 		stackExp:     make(map[stackKey]bool),
 		prExp:        make(map[[2]int]bool),
 		lastActivity: time.Now(),
@@ -319,18 +321,130 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 	case rerunResultExpiredMsg:
 		d.clearRerunResult()
 	case state.Snapshot:
+		sel := d.selectedRow()
 		d.snapshot = msg
+		opened := d.autoExpand()
 		d.rows = d.buildRows()
-		if d.cursor >= len(d.rows) && len(d.rows) > 0 {
-			d.cursor = len(d.rows) - 1
+		d.restoreCursor(sel)
+		var cmd tea.Cmd
+		if opened {
+			// Newly opened repos need the job and PR-run detail the poller
+			// skips for collapsed ones.
+			cmd = expandedChangedCmd(d.ExpandedRepos())
 		}
 		// The poll that follows a successful re-run shows the new run, so the
 		// transient notice has done its job. Errors stay until they time out.
 		if d.rerunStatus == rerunShowResult && !d.rerunFailure {
 			d.clearRerunResult()
 		}
+		return d, cmd
 	}
 	return d, nil
+}
+
+// needsAttention reports whether a repo has CI running or failing, on its
+// branch or on any PR the dashboard knows about.
+func needsAttention(r state.RepoState) bool {
+	active := func(s aggregator.Stoplight) bool {
+		return s == aggregator.StoplightYellow || s == aggregator.StoplightRed
+	}
+	if active(r.Stoplight) {
+		return true
+	}
+	for _, p := range r.PRs {
+		if active(p.Stoplight) {
+			return true
+		}
+	}
+	return false
+}
+
+// autoExpand opens repos that start needing attention and closes repos that
+// stop. It acts only when that state changes (or a repo first appears), so a
+// row the user opened or closed by hand stays that way until its CI moves.
+// It reports whether any repo was opened.
+func (d *Dashboard) autoExpand() bool {
+	opened := false
+	seen := make(map[string]bool, len(d.snapshot.Repos))
+	for _, r := range d.snapshot.Repos {
+		name := r.FullName()
+		seen[name] = true
+		now := needsAttention(r)
+		if was, known := d.attention[name]; known && was == now {
+			continue
+		}
+		d.attention[name] = now
+		if now && !d.repoExp[name] {
+			opened = true
+		}
+		d.repoExp[name] = now
+	}
+	for name := range d.attention {
+		if !seen[name] {
+			delete(d.attention, name)
+		}
+	}
+	return opened
+}
+
+// rowRef identifies a row by what it shows rather than by position, so the
+// cursor can follow it when rows are inserted above it.
+type rowRef struct {
+	repo  string
+	kind  rowKind
+	num   int // PR or stack number
+	valid bool
+}
+
+func (d Dashboard) selectedRow() rowRef {
+	if d.cursor < 0 || d.cursor >= len(d.rows) {
+		return rowRef{}
+	}
+	return d.refFor(d.rows[d.cursor])
+}
+
+func (d Dashboard) refFor(row flatRow) rowRef {
+	if row.repoIdx >= len(d.snapshot.Repos) {
+		return rowRef{}
+	}
+	r := d.snapshot.Repos[row.repoIdx]
+	ref := rowRef{repo: r.FullName(), kind: row.kind, valid: true}
+	switch row.kind {
+	case kindPR:
+		if row.prIdx < len(r.PRs) {
+			ref.num = r.PRs[row.prIdx].Number
+		}
+	case kindStack:
+		if g := d.group(row); g != nil {
+			ref.num = g.stackNum
+		}
+	}
+	return ref
+}
+
+// restoreCursor moves the cursor back onto sel after a rebuild, falling back
+// to sel's repo row, then to clamping.
+func (d *Dashboard) restoreCursor(sel rowRef) {
+	if sel.valid {
+		repoRow := -1
+		for i, row := range d.rows {
+			ref := d.refFor(row)
+			if ref == sel {
+				d.cursor = i
+				return
+			}
+			if repoRow < 0 && ref.kind == kindRepo && ref.repo == sel.repo {
+				repoRow = i
+			}
+		}
+		if repoRow >= 0 {
+			d.cursor = repoRow
+			return
+		}
+	}
+	if d.cursor >= len(d.rows) && len(d.rows) > 0 {
+		d.cursor = len(d.rows) - 1
+	}
 }
 
 // startRerun moves out of the confirmation and fires the re-run in a command.
