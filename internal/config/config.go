@@ -136,8 +136,26 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// AddRepo appends a new repo and saves.
+// HasRepo reports whether owner/name is already configured, ignoring case
+// (GitHub names are case-insensitive) and skipping index skip (-1 for none).
+func (c *Config) HasRepo(owner, name string, skip int) bool {
+	for i, r := range c.Repos {
+		if i != skip && strings.EqualFold(r.Owner, owner) && strings.EqualFold(r.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func duplicateErr(r Repo) error {
+	return fmt.Errorf("%s/%s is already configured", r.Owner, r.Name)
+}
+
+// AddRepo appends a new repo and saves. It rejects a repo already configured.
 func (c *Config) AddRepo(r Repo) error {
+	if c.HasRepo(r.Owner, r.Name, -1) {
+		return duplicateErr(r)
+	}
 	c.Repos = append(c.Repos, r)
 	return c.Save()
 }
@@ -146,6 +164,9 @@ func (c *Config) AddRepo(r Repo) error {
 func (c *Config) UpdateRepo(i int, r Repo) error {
 	if i < 0 || i >= len(c.Repos) {
 		return fmt.Errorf("repo index %d out of range", i)
+	}
+	if c.HasRepo(r.Owner, r.Name, i) {
+		return duplicateErr(r)
 	}
 	c.Repos[i] = r
 	return c.Save()

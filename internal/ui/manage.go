@@ -189,8 +189,14 @@ func (m Manage) buildForm(title string) *huh.Form {
 				Description("owner/name, or paste a GitHub URL").
 				Value(m.fRepo).
 				Validate(func(s string) error {
-					_, _, err := config.ParseRepoRef(s)
-					return err
+					owner, name, err := config.ParseRepoRef(s)
+					if err != nil {
+						return err
+					}
+					if m.cfg.HasRepo(owner, name, m.editIdx) {
+						return fmt.Errorf("%s/%s is already configured", owner, name)
+					}
+					return nil
 				}),
 			huh.NewInput().
 				Title("Branch").
