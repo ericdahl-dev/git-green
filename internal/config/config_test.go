@@ -464,3 +464,40 @@ func TestParseRepoRef(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectsDuplicateRepos(t *testing.T) {
+	path := writeTempConfig(t, `
+[[repos]]
+owner = "a"
+name = "first"
+
+[[repos]]
+owner = "b"
+name = "second"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cfg.AddRepo(Repo{Owner: "A", Name: "First", Branch: "dev"}); err == nil {
+		t.Error("AddRepo accepted a duplicate (case-insensitive, different branch)")
+	}
+	if len(cfg.Repos) != 2 {
+		t.Errorf("duplicate was appended: %d repos", len(cfg.Repos))
+	}
+
+	if err := cfg.UpdateRepo(1, Repo{Owner: "a", Name: "first"}); err == nil {
+		t.Error("UpdateRepo accepted renaming onto another repo")
+	}
+	if err := cfg.UpdateRepo(0, Repo{Owner: "a", Name: "first", Branch: "dev"}); err != nil {
+		t.Errorf("UpdateRepo on itself should succeed: %v", err)
+	}
+
+	if !cfg.HasRepo("B", "SECOND", -1) {
+		t.Error("HasRepo should match case-insensitively")
+	}
+	if cfg.HasRepo("b", "second", 1) {
+		t.Error("HasRepo should skip the excluded index")
+	}
+}
