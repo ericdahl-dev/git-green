@@ -13,6 +13,7 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 - **Stacked PRs grouped** — PRs in a `gh stack` stack collapse into one row that shows the stack number, its health, and each member in merge order
 - **Active-first sorting** — in-progress and failing repos/PRs bubble to the top automatically
 - **Inline expand/collapse** — navigate with `↑`/`↓`, toggle any row with `enter`/`space`
+- **Auto-expand** — a repo opens on its own when its CI starts running or failing and closes when it goes green again; a row you toggle by hand stays put until its status changes
 - **Auto-polling** — refreshes every 15 seconds (configurable); retains last-known status on API errors
 - **Adaptive pacing** — watches each token's GitHub REST budget and stretches the poll interval only as far as it must to last the hour, keeping a reserve for your other tools
 - **In-TUI repo management** — add, edit, delete, and enable/disable repos without leaving the terminal

@@ -93,7 +93,7 @@ The Dashboard renders a two-level expandable tree:
                ✗  test
 ```
 
-- **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section, then Stack rows and standalone PR rows.
+- **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section, then Stack rows and standalone PR rows. A Repo opens on its own when its CI starts running or failing (its branch Stoplight, or any PR it has loaded, goes 🟡 or 🔴) and closes again when it goes quiet, so a calm dashboard sits collapsed. This only fires when that state changes, so a Repo the user opened or closed by hand stays that way until its CI moves. Collapsed Repos do not fetch PR runs, so PR-only activity on a collapsed Repo does not open it.
 - **Branch section**: non-navigable; always rendered above PR rows when a Repo is expanded.
 - **Stack row**: navigable; expand/collapse with `enter`/`space` to show its member PR rows. Its Stoplight is the most actionable of its members', and `f` and `o` act on the first failing member so a collapsed Stack still exposes what broke.
 - **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`.
