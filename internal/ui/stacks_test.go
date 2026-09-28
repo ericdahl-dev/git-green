@@ -209,3 +209,23 @@ func equalInts(a, b []int) bool {
 	}
 	return true
 }
+
+func TestPRRowShowsReviewGlyph(t *testing.T) {
+	approved := lonePR(7, aggregator.StoplightGreen)
+	approved.Review = githubclient.ReviewApproved
+	changes := lonePR(3, aggregator.StoplightGreen)
+	changes.Review = githubclient.ReviewChangesRequested
+	waiting := lonePR(9, aggregator.StoplightGreen)
+	waiting.Review = githubclient.ReviewWaiting
+	quiet := lonePR(12, aggregator.StoplightGreen)
+
+	d := NewDashboard(repoWithPRs(approved, changes, waiting, quiet))
+	d, _ = d.Update(key("enter")) // expand the repo
+	body := d.BodyView()
+
+	for _, want := range []string{"PR #7 ✓ ·", "PR #3 ± ·", "PR #9 ○ ·", "PR #12 ·"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}

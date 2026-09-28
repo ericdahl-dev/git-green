@@ -458,6 +458,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 			Runs:      pr.Runs,
 			Mergeable: pr.PR.Mergeable,
 			Stack:     pr.PR.Stack,
+			Review:    pr.PR.Review,
 		})
 	}
 

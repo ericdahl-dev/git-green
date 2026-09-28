@@ -67,6 +67,21 @@ The visual health indicator for a Repo or PR. Aggregates across all Workflows us
 
 _Avoid_: badge, indicator, light
 
+## Review
+
+Where a PR stands with its reviewers, shown as a glyph after the PR number. It is separate from the Stoplight, which stays CI-only, so Review never affects Active-first sorting or auto-expand.
+
+| Glyph | Meaning |
+|---|---|
+| `✓` | Approved |
+| `±` | Changes requested — outranks any approval |
+| `○` | Waiting — a review is required or requested, none given yet |
+| (none) | No Review signal |
+
+GitHub's `reviewDecision` is used when set, which it only is when branch protection requires reviews. Otherwise each reviewer's latest review decides it, then any pending review requests.
+
+_Avoid_: approval status, review badge
+
 ## Active-first sorting
 
 Repos, Stacks, and PRs are sorted by Stoplight priority so the most actionable items appear at the top: 🟡 in-progress → 🔴 failing → 🟢 passing → ⚪ no signal. Order is stable within each tier.
@@ -87,7 +102,7 @@ The Dashboard renders a two-level expandable tree:
       ▼ 🔴  stack #272 · 4 PRs · wse-1937-id-search
             ▶ 🟢  1/4  PR #268 · feat: parse ids
             ▶ 🔴  2/4  PR #270 · feat: export rows
-      ▶ 🟡  PR #7 · feat: something
+      ▶ 🟡  PR #7 ✓ · feat: something
       ▼ 🔴  PR #3 · fix: auth bug
             ✗  CI
                ✗  test
@@ -96,7 +111,7 @@ The Dashboard renders a two-level expandable tree:
 - **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section, then Stack rows and standalone PR rows. A Repo opens on its own when its CI starts running or failing (its branch Stoplight, or any PR it has loaded, goes 🟡 or 🔴) and closes again when it goes quiet, so a calm dashboard sits collapsed. This only fires when that state changes, so a Repo the user opened or closed by hand stays that way until its CI moves. Collapsed Repos do not fetch PR runs, so PR-only activity on a collapsed Repo does not open it.
 - **Branch section**: non-navigable; always rendered above PR rows when a Repo is expanded.
 - **Stack row**: navigable; expand/collapse with `enter`/`space` to show its member PR rows. Its Stoplight is the most actionable of its members', and `f` and `o` act on the first failing member so a collapsed Stack still exposes what broke.
-- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`.
+- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`. A Review glyph follows the PR number when there is a Review signal.
 
 _Avoid_: detail view, drill-down screen
 
@@ -108,7 +123,7 @@ Each poll cycle makes the following API calls per enabled Repo:
 - 1 × `Repositories.Get` (first poll only, when no branch is configured — result cached)
 - 1 × `ListRepositoryWorkflowRuns` (branch runs)
 - 1 × `PullRequests.List`
-- 1 × GraphQL query for Stack membership, only when 2+ PRs are open (a Stack needs at least two). A failure here costs only the grouping — PRs still render, ungrouped.
+- 1 × GraphQL query for Stack membership and Review status, only for an expanded Repo with 1+ open PRs. A host that rejects the Stack fields gets one Review-only retry. A failure here costs only the grouping and Review glyphs — PRs still render.
 - 1 × `ListRepositoryWorkflowRuns` per open PR (head SHA runs)
 - 1 × `ListWorkflowJobs` per branch Workflow Run
 

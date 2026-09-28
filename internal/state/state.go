@@ -16,6 +16,7 @@ type PRState struct {
 	Runs      []githubclient.WorkflowRun
 	Mergeable string              // "clean", "conflicting", "unknown", or ""
 	Stack     *githubclient.Stack // non-nil when the PR is part of a stack
+	Review    githubclient.Review
 }
 
 // RepoState holds the current display state for a single Repo.
