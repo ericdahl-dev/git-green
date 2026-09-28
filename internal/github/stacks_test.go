@@ -29,18 +29,24 @@ const stackBody = `{"data":{"repository":{"pullRequests":{"nodes":[
   {"number":259,"headRefName":"wse-1862-honest-cache-store","stack":null,"stackEntry":null}
 ]}}}}`
 
-func TestFetchStacksKeysByPRNumber(t *testing.T) {
+func TestFetchPRMetaKeysStacksByPRNumber(t *testing.T) {
 	c, sent := stubGraphQL(t, http.StatusOK, stackBody)
 
-	stacks, err := c.fetchStacks(context.Background(), "ndlibrary", "annex-ims")
+	meta, err := c.fetchPRMeta(context.Background(), "ndlibrary", "annex-ims")
 	if err != nil {
 		t.Fatalf("fetchStacks: %v", err)
 	}
-	if len(stacks) != 2 {
-		t.Fatalf("got %d stacked PRs, want 2 (the unstacked one must be skipped)", len(stacks))
+	stacked := 0
+	for _, m := range meta {
+		if m.Stack != nil {
+			stacked++
+		}
+	}
+	if stacked != 2 {
+		t.Fatalf("got %d stacked PRs, want 2 (the unstacked one must have no stack)", stacked)
 	}
 
-	bottom := stacks[268]
+	bottom := meta[268].Stack
 	if bottom.Number != 272 || bottom.Size != 4 || bottom.Position != 1 {
 		t.Errorf("PR 268: got stack #%d size %d position %d, want #272 size 4 position 1",
 			bottom.Number, bottom.Size, bottom.Position)
@@ -48,11 +54,11 @@ func TestFetchStacksKeysByPRNumber(t *testing.T) {
 	if bottom.HeadRef != "wse-1937-id-search" {
 		t.Errorf("PR 268: got head ref %q", bottom.HeadRef)
 	}
-	if got := stacks[271].Position; got != 4 {
+	if got := meta[271].Stack.Position; got != 4 {
 		t.Errorf("PR 271: got position %d, want 4", got)
 	}
-	if _, ok := stacks[259]; ok {
-		t.Error("PR 259 has no stack, so it must not appear in the map")
+	if meta[259].Stack != nil {
+		t.Error("PR 259 has no stack")
 	}
 
 	if !strings.Contains(*sent, `"owner":"ndlibrary"`) || !strings.Contains(*sent, `"name":"annex-ims"`) {
@@ -60,22 +66,21 @@ func TestFetchStacksKeysByPRNumber(t *testing.T) {
 	}
 }
 
-// A host that does not know about stacks answers with a GraphQL error rather
-// than an HTTP one, and that must surface as an error so FetchAll can fall
-// back to showing PRs ungrouped.
-func TestFetchStacksReportsGraphQLErrors(t *testing.T) {
+// A GraphQL error that survives the review-only retry must surface as an
+// error so FetchAll can fall back to showing PRs ungrouped.
+func TestFetchPRMetaReportsGraphQLErrors(t *testing.T) {
 	c, _ := stubGraphQL(t, http.StatusOK,
 		`{"errors":[{"message":"Field 'stack' doesn't exist on type 'PullRequest'"}]}`)
 
-	if _, err := c.fetchStacks(context.Background(), "o", "n"); err == nil {
+	if _, err := c.fetchPRMeta(context.Background(), "o", "n"); err == nil {
 		t.Fatal("expected an error for a GraphQL error response")
 	}
 }
 
-func TestFetchStacksReportsHTTPErrors(t *testing.T) {
+func TestFetchPRMetaReportsHTTPErrors(t *testing.T) {
 	c, _ := stubGraphQL(t, http.StatusUnauthorized, `{}`)
 
-	if _, err := c.fetchStacks(context.Background(), "o", "n"); err == nil {
+	if _, err := c.fetchPRMeta(context.Background(), "o", "n"); err == nil {
 		t.Fatal("expected an error for a 401 response")
 	}
 }

@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	githubclient "github.com/ericdahl-dev/git-green/internal/github"
+)
 
 var (
 	jobGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
@@ -24,4 +28,19 @@ func workflowStatusIcon(status string) string {
 
 func jobStatusIcon(status string) string {
 	return workflowStatusIcon(status)
+}
+
+// reviewGlyph marks a PR's review state after its number, with a leading
+// space, or returns nothing when there is no review signal.
+func reviewGlyph(r githubclient.Review) string {
+	switch r {
+	case githubclient.ReviewApproved:
+		return " " + jobGreen.Render("✓")
+	case githubclient.ReviewChangesRequested:
+		return " " + jobRed.Render("±")
+	case githubclient.ReviewWaiting:
+		return " " + jobYellow.Render("○")
+	default:
+		return ""
+	}
 }
