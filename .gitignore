@@ -1,2 +1,5 @@
 # goreleaser build output
 dist/
+
+# local `go build` output
+/git-green
