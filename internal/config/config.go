@@ -110,6 +110,28 @@ func Load(path string) (*Config, error) {
 // Path returns the file path this config was loaded from.
 func (c *Config) Path() string { return c.path }
 
+// Clone returns a deep copy, so a reader can hold a Config that later edits to
+// the original (the Repo manager edits in place) never touch.
+func (c *Config) Clone() *Config {
+	out := *c
+	out.Orgs = append([]Org(nil), c.Orgs...)
+	out.Webhooks = append([]Webhook(nil), c.Webhooks...)
+	out.Repos = make([]Repo, len(c.Repos))
+	for i, r := range c.Repos {
+		r.Workflows = append([]string(nil), r.Workflows...)
+		if r.Enabled != nil {
+			enabled := *r.Enabled
+			r.Enabled = &enabled
+		}
+		out.Repos[i] = r
+	}
+	out.resolvedTokens = make(map[string]string, len(c.resolvedTokens))
+	for k, v := range c.resolvedTokens {
+		out.resolvedTokens[k] = v
+	}
+	return &out
+}
+
 // EnabledRepos returns only repos that are enabled.
 func (c *Config) EnabledRepos() []Repo {
 	var out []Repo

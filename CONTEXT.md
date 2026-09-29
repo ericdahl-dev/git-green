@@ -133,6 +133,11 @@ Each poll cycle makes the following API calls per enabled Repo:
 
 Disabled Repos are skipped entirely — no API calls are made for them.
 
+The Poller runs one poll cycle at a time. A force refresh (`r`, expanding a
+Repo) or a Repo manager edit asks for the next cycle now rather than starting
+another alongside it, and requests made while one is waiting collapse into it.
+The Poller works from its own copy of the Config file, taken on each reload.
+
 A failed fetch retains the last known status and marks the Repo stale. A Repo
 skipped by **Pacing** is not stale — nothing failed, it is simply not due yet.
 

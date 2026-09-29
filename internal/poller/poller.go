@@ -50,6 +50,13 @@ type Poller struct {
 	// now is swappable in tests so threshold crossings can be exercised
 	// without waiting on the wall clock.
 	now func() time.Time
+
+	// refresh wakes the fetch loop early; pending holds a Config waiting to
+	// be applied at the start of its next cycle (guarded by mu). Only the
+	// loop goroutine replaces cfg and dispatcher, and only between cycles, so
+	// a cycle's fetches read them without a lock.
+	refresh chan struct{}
+	pending *config.Config
 }
 
 // New creates a Poller with the given config and client factory.
@@ -64,6 +71,7 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 			Stoplight: aggregator.StoplightGrey,
 		}
 	}
+	cfg = cfg.Clone()
 	p := &Poller{
 		cfg:        cfg,
 		factory:    factory,
@@ -72,6 +80,7 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		stuck:      make(map[string]*stuckEntry),
 		expanded:   make(map[string]bool),
 		now:        time.Now,
+		refresh:    make(chan struct{}, 1),
 	}
 	// Read the clock through p.now so tests that swap it move pacing too.
 	p.pacer = ratelimit.NewPacer(func() time.Time { return p.now() })
@@ -107,23 +116,28 @@ func (p *Poller) Snapshot() state.Snapshot {
 	return state.New(p.current)
 }
 
-// Start begins polling on the configured interval, sending Snapshots to the returned channel.
-// Call the returned cancel func to stop.
+// Start runs the fetch loop until ctx is cancelled or the returned cancel is
+// called, sending a Snapshot after every cycle. The loop is the only fetcher
+// and the only sender, so cycles never overlap and the channel closes only
+// once nothing can send on it.
 func (p *Poller) Start(ctx context.Context) (<-chan state.Snapshot, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	ch := make(chan state.Snapshot, 1)
 
 	go func() {
 		defer close(ch)
-		p.fetch(ctx, ch)
-		ticker := time.NewTicker(time.Duration(p.cfg.Settings.PollInterval) * time.Second)
+		ticker := time.NewTicker(p.interval())
 		defer ticker.Stop()
 		for {
+			if p.applyPending() {
+				ticker.Reset(p.interval())
+			}
+			publish(ch, p.fetch(ctx))
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				p.fetch(ctx, ch)
+			case <-p.refresh:
 			}
 		}
 	}()
@@ -131,22 +145,54 @@ func (p *Poller) Start(ctx context.Context) (<-chan state.Snapshot, context.Canc
 	return ch, cancel
 }
 
-// ForceRefresh triggers an immediate out-of-cycle fetch.
-func (p *Poller) ForceRefresh(ctx context.Context, ch chan<- state.Snapshot) {
-	go p.fetch(ctx, ch)
+// Refresh asks the loop for a cycle now instead of at the next tick. Requests
+// made while one is already waiting collapse into it.
+func (p *Poller) Refresh() {
+	select {
+	case p.refresh <- struct{}{}:
+	default:
+	}
 }
 
-// ReloadConfig replaces the config (e.g. after CRUD edits) and triggers an
-// immediate fetch so the dashboard reflects the new repo list.
-func (p *Poller) ReloadConfig(cfg *config.Config, ctx context.Context, ch chan<- state.Snapshot) {
+// Reload swaps in a new Config (a copy, so later edits to cfg do not reach
+// the Poller) from the next cycle, and asks for that cycle now.
+func (p *Poller) Reload(cfg *config.Config) {
 	p.mu.Lock()
-	p.cfg = cfg
-	p.dispatcher = webhooks.New(cfg.Webhooks)
+	p.pending = cfg.Clone()
 	p.mu.Unlock()
-	go p.fetch(ctx, ch)
+	p.Refresh()
 }
 
-func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
+// applyPending installs a Config waiting from Reload. Called only by the loop,
+// between cycles. It reports whether there was one.
+func (p *Poller) applyPending() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pending == nil {
+		return false
+	}
+	p.cfg, p.pending = p.pending, nil
+	p.dispatcher = webhooks.New(p.cfg.Webhooks)
+	return true
+}
+
+func (p *Poller) interval() time.Duration {
+	return time.Duration(p.cfg.Settings.PollInterval) * time.Second
+}
+
+// publish hands snap to the reader, replacing one it has not taken yet: the
+// newest Snapshot is the only one worth showing. It never blocks, which is
+// safe because the loop is the channel's only sender.
+func publish(ch chan state.Snapshot, snap state.Snapshot) {
+	select {
+	case <-ch:
+	default:
+	}
+	ch <- snap
+}
+
+// fetch runs one cycle across every enabled Repo and returns the result.
+func (p *Poller) fetch(ctx context.Context) state.Snapshot {
 	var wg sync.WaitGroup
 	enabled := p.cfg.EnabledRepos()
 	results := make([]state.RepoState, len(enabled))
@@ -180,7 +226,7 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 	}
 
 	wg.Wait()
-	p.pacer.EndCycle(time.Duration(p.cfg.Settings.PollInterval) * time.Second)
+	p.pacer.EndCycle(p.interval())
 
 	p.mu.Lock()
 	p.current = results
@@ -195,11 +241,7 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 
 	snap := state.New(results)
 	snap.Throttles = p.Throttles()
-	select {
-	case ch <- snap:
-	default:
-		// drop if consumer is slow; next tick will send a fresher snapshot
-	}
+	return snap
 }
 
 // pacedOut reports whether an Org's token is being paced this cycle. A token
