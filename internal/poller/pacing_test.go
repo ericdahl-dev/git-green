@@ -8,7 +8,6 @@ import (
 
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 	"github.com/ericdahl-dev/git-green/internal/ratelimit"
-	"github.com/ericdahl-dev/git-green/internal/state"
 )
 
 // budgetFetcher reports a fixed cost and budget, and counts how many times it
@@ -71,10 +70,9 @@ func TestHealthyTokenIsNeverPaced(t *testing.T) {
 		Remaining: 4800, Limit: 5000, Reset: now.Add(50 * time.Minute),
 	}}
 	p := pacingPoller(t, f, now)
-	ch := make(chan state.Snapshot, 4)
 
-	p.fetch(context.Background(), ch)
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
+	p.fetch(context.Background())
 
 	if got := f.count(); got != 4 {
 		t.Errorf("fetched %d times across 2 cycles of 2 repos, want 4", got)
@@ -92,9 +90,8 @@ func TestThinBudgetSkipsTheWholeToken(t *testing.T) {
 		Remaining: 400, Limit: 5000, Reset: now.Add(30 * time.Minute),
 	}}
 	p := pacingPoller(t, f, now)
-	ch := make(chan state.Snapshot, 4)
 
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	if got := f.count(); got != 2 {
 		t.Fatalf("first cycle fetched %d repos, want 2", got)
 	}
@@ -112,7 +109,7 @@ func TestThinBudgetSkipsTheWholeToken(t *testing.T) {
 
 	// Still inside the stretched interval: both repos sit this one out and
 	// keep their previous state rather than going stale.
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	if got := f.count(); got != 2 {
 		t.Errorf("throttled token polled again after %d fetches, want it skipped", got)
 	}
@@ -130,13 +127,12 @@ func TestThrottledTokenResumesWhenDue(t *testing.T) {
 		Remaining: 400, Limit: 5000, Reset: start.Add(30 * time.Minute),
 	}}
 	p := pacingPoller(t, f, start)
-	ch := make(chan state.Snapshot, 4)
 
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	interval := p.Throttles()[0].Interval
 
 	p.now = func() time.Time { return start.Add(interval + time.Second) }
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 
 	if got := f.count(); got != 4 {
 		t.Errorf("fetched %d times, want 4 once the interval elapsed", got)
@@ -150,16 +146,9 @@ func TestSnapshotCarriesThrottles(t *testing.T) {
 		Remaining: 400, Limit: 5000, Reset: now.Add(30 * time.Minute),
 	}}
 	p := pacingPoller(t, f, now)
-	ch := make(chan state.Snapshot, 4)
 
-	p.fetch(context.Background(), ch)
-
-	select {
-	case snap := <-ch:
-		if len(snap.Throttles) != 1 {
-			t.Errorf("snapshot carried %d throttles, want 1", len(snap.Throttles))
-		}
-	default:
-		t.Fatal("no snapshot was sent")
+	snap := p.fetch(context.Background())
+	if len(snap.Throttles) != 1 {
+		t.Errorf("snapshot carried %d throttles, want 1", len(snap.Throttles))
 	}
 }

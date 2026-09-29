@@ -100,12 +100,12 @@ name = "git-green"
 		return &stubFetcher{err: errors.New("api down")}
 	}
 
+	// The Poller copies its Config, so set the interval before handing it over.
+	cfg.Settings.PollInterval = 1
 	p := New(cfg, factory)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Test via Start with very short interval.
-	cfg.Settings.PollInterval = 1
 	pollCh, stop := p.Start(ctx)
 	defer stop()
 
@@ -507,8 +507,7 @@ func TestCollapsedRepoDoesNotRequestDetail(t *testing.T) {
 	f := &recordingFetcher{}
 	p := recordingPoller(t, f)
 
-	ch := make(chan state.Snapshot, 1)
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 
 	if got := f.last(t); got.Detail {
 		t.Error("collapsed repo requested job and PR-run detail")
@@ -520,8 +519,7 @@ func TestExpandedRepoRequestsDetail(t *testing.T) {
 	p := recordingPoller(t, f)
 	p.SetExpandedRepos([]string{"o/r"})
 
-	ch := make(chan state.Snapshot, 1)
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 
 	if got := f.last(t); !got.Detail {
 		t.Error("expanded repo did not request detail")
@@ -529,7 +527,7 @@ func TestExpandedRepoRequestsDetail(t *testing.T) {
 
 	// Collapsing it again drops back to the cheap query.
 	p.SetExpandedRepos(nil)
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	if got := f.last(t); got.Detail {
 		t.Error("collapsing did not stop detail fetching")
 	}
@@ -539,14 +537,13 @@ func TestResolvedBranchSurvivesAnError(t *testing.T) {
 	f := &recordingFetcher{}
 	p := recordingPoller(t, f)
 
-	ch := make(chan state.Snapshot, 1)
-	p.fetch(context.Background(), ch) // resolves "main"
+	p.fetch(context.Background()) // resolves "main"
 
 	// Now every fetch fails. The resolved branch must be carried forward, so
 	// the next query still names it rather than asking GitHub to resolve the
 	// default branch again.
 	f.err = errors.New("boom")
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 
 	if got := f.last(t).Branch; got != "main" {
 		t.Errorf("branch after error = %q, want main to be preserved", got)
@@ -566,8 +563,7 @@ func TestRateLimitBacksOffUntilReset(t *testing.T) {
 	reset := now.Add(30 * time.Minute)
 	f.err = &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: reset}}}
 
-	ch := make(chan state.Snapshot, 1)
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	after := len(f.queries)
 	if after != 1 {
 		t.Fatalf("expected the first poll to reach the API, got %d calls", after)
@@ -576,7 +572,7 @@ func TestRateLimitBacksOffUntilReset(t *testing.T) {
 	// While rate limited, polling must not touch the API at all.
 	for i := 0; i < 5; i++ {
 		now = now.Add(time.Minute)
-		p.fetch(context.Background(), ch)
+		p.fetch(context.Background())
 	}
 	if len(f.queries) != after {
 		t.Errorf("made %d calls while rate limited, want none after the first", len(f.queries)-after)
@@ -588,7 +584,7 @@ func TestRateLimitBacksOffUntilReset(t *testing.T) {
 	// Past the reset it resumes.
 	now = reset.Add(time.Second)
 	f.err = nil
-	p.fetch(context.Background(), ch)
+	p.fetch(context.Background())
 	if len(f.queries) != after+1 {
 		t.Error("did not resume polling after the reset time")
 	}
@@ -613,5 +609,79 @@ func TestRunsStuckReasonFollowsStoplight(t *testing.T) {
 		if stuck != tc.stuck || reason != tc.reason {
 			t.Errorf("%s/%s: got (%v, %q), want (%v, %q)", tc.run.Status, tc.run.Conclusion, stuck, reason, tc.stuck, tc.reason)
 		}
+	}
+}
+
+const loopConfig = `
+[settings]
+poll_interval_seconds = 3600
+
+[[orgs]]
+name = "acme"
+token = "t"
+
+[[repos]]
+owner = "acme"
+name = "one"
+`
+
+func recv(t *testing.T, ch <-chan state.Snapshot) state.Snapshot {
+	t.Helper()
+	select {
+	case snap := <-ch:
+		return snap
+	case <-time.After(2 * time.Second):
+		t.Fatal("no snapshot arrived")
+		return state.Snapshot{}
+	}
+}
+
+// Refresh runs a cycle now rather than waiting out the hour-long tick.
+func TestRefreshRunsACycle(t *testing.T) {
+	p := New(writeConfig(t, loopConfig), stubFactory(nil, nil))
+	ch, stop := p.Start(context.Background())
+	defer stop()
+	recv(t, ch)
+
+	p.Refresh()
+	recv(t, ch)
+}
+
+// Reload takes effect on the next cycle and is isolated from later edits to
+// the Config it was handed, as the Repo manager edits in place.
+func TestReloadAppliesACopyOfTheConfig(t *testing.T) {
+	cfg := writeConfig(t, loopConfig)
+	p := New(cfg, stubFactory(nil, nil))
+	ch, stop := p.Start(context.Background())
+	defer stop()
+	recv(t, ch)
+
+	if err := cfg.AddRepo(config.Repo{Owner: "acme", Name: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(p.Snapshot().Repos); got != 1 {
+		t.Fatalf("an edit before Reload reached the Poller: %d repos", got)
+	}
+
+	p.Reload(cfg)
+	if got := len(recv(t, ch).Repos); got != 2 {
+		t.Fatalf("after Reload got %d repos, want 2", got)
+	}
+
+	_ = cfg.RemoveRepo(1)
+	p.Refresh()
+	if got := len(recv(t, ch).Repos); got != 2 {
+		t.Errorf("an edit after Reload reached the Poller: %d repos", got)
+	}
+}
+
+// Stopping closes the channel once, with no cycle left to send on it.
+func TestStopClosesTheChannel(t *testing.T) {
+	p := New(writeConfig(t, loopConfig), stubFactory(nil, nil))
+	ch, stop := p.Start(context.Background())
+	recv(t, ch)
+	p.Refresh()
+	stop()
+	for range ch {
 	}
 }

@@ -7,210 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 
-	bspin "github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ericdahl-dev/git-green/internal/app"
 	"github.com/ericdahl-dev/git-green/internal/config"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 	"github.com/ericdahl-dev/git-green/internal/poller"
-	"github.com/ericdahl-dev/git-green/internal/state"
-	"github.com/ericdahl-dev/git-green/internal/ui"
 	"github.com/ericdahl-dev/git-green/internal/wizard"
 )
-
-type screen int
-
-const (
-	screenDashboard screen = iota
-	screenManage
-)
-
-type model struct {
-	screen      screen
-	dashboard   ui.Dashboard
-	manage      ui.Manage
-	showHelp    bool
-	pollCh      <-chan state.Snapshot
-	pollCancel  context.CancelFunc
-	pollCtx     context.Context
-	poller      *poller.Poller
-	pollChWrite chan state.Snapshot
-	winWidth    int
-	fetching    bool
-	spinner     bspin.Model
-	cfg         *config.Config
-}
-
-// rerunner re-runs a workflow run through a client authenticated with the
-// token for that repo's org, the same way the poller picks one per repo.
-type rerunner struct {
-	cfg *config.Config
-}
-
-func (r rerunner) RerunFailedJobs(ctx context.Context, owner, name string, runID int64) error {
-	token, err := r.cfg.TokenForOrg(owner)
-	if err != nil {
-		return err
-	}
-	return githubclient.New(token).RerunFailedJobs(ctx, owner, name, runID)
-}
-
-func waitForSnapshot(ch <-chan state.Snapshot) tea.Cmd {
-	return func() tea.Msg {
-		snap, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return snap
-	}
-}
-
-func kickSpinner(s bspin.Model) tea.Cmd {
-	return func() tea.Msg {
-		return s.Tick()
-	}
-}
-
-func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		waitForSnapshot(m.pollCh),
-		kickSpinner(m.spinner),
-	)
-}
-
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.winWidth = msg.Width
-
-	case bspin.TickMsg:
-		if !m.fetching {
-			return m, nil
-		}
-		var sc tea.Cmd
-		m.spinner, sc = m.spinner.Update(msg)
-		cmds = append(cmds, sc)
-
-	case ui.BackMsg:
-		m.screen = screenDashboard
-		return m, nil
-
-	case ui.ExpandedReposMsg:
-		// A row opened or closed: the poller now needs a different amount of
-		// detail for that repo, so refresh instead of waiting for the tick.
-		m.poller.SetExpandedRepos(msg.Repos)
-		m.fetching = true
-		m.poller.ForceRefresh(m.pollCtx, m.pollChWrite)
-		cmds = append(cmds, kickSpinner(m.spinner))
-		return m, tea.Batch(cmds...)
-
-	case ui.ConfigChangedMsg:
-		m.cfg = msg.Config
-		m.poller.ReloadConfig(m.cfg, m.pollCtx, m.pollChWrite)
-		m.dashboard = m.dashboard.WithRerunner(m.pollCtx, rerunner{cfg: m.cfg})
-		m.fetching = true
-		cmds = append(cmds, kickSpinner(m.spinner))
-		return m, tea.Batch(cmds...)
-
-	case tea.KeyMsg:
-		if m.screen == screenManage {
-			var manCmd tea.Cmd
-			m.manage, manCmd = m.manage.Update(msg)
-			return m, manCmd
-		}
-
-		// While the dashboard holds a re-run confirmation it owns every key but
-		// the hard quit, so enter/esc reach the prompt instead of the root.
-		if m.dashboard.AwaitingConfirm() && msg.String() != "ctrl+c" {
-			var dashCmd tea.Cmd
-			m.dashboard, dashCmd = m.dashboard.Update(msg)
-			return m, dashCmd
-		}
-
-		switch msg.String() {
-		case "q", "ctrl+c":
-			m.pollCancel()
-			return m, tea.Quit
-		case "?":
-			m.showHelp = !m.showHelp
-			return m, nil
-		case "esc":
-			m.showHelp = false
-			return m, nil
-		case "m":
-			m.screen = screenManage
-			m.manage = ui.NewManage(m.cfg)
-			return m, nil
-		case "r":
-			m.fetching = true
-			m.poller.ForceRefresh(m.pollCtx, m.pollChWrite)
-			cmds = append(cmds, kickSpinner(m.spinner))
-			var dashCmd tea.Cmd
-			m.dashboard, dashCmd = m.dashboard.Update(msg)
-			cmds = append(cmds, dashCmd)
-			return m, tea.Batch(cmds...)
-		case "o":
-			m.openSelectedURL()
-			return m, nil
-		}
-
-	case state.Snapshot:
-		m.fetching = false
-		cmds = append(cmds, waitForSnapshot(m.pollCh))
-		var dashCmd tea.Cmd
-		m.dashboard, dashCmd = m.dashboard.Update(msg)
-		cmds = append(cmds, dashCmd)
-		return m, tea.Batch(cmds...)
-	}
-
-	if m.screen == screenManage {
-		var manCmd tea.Cmd
-		m.manage, manCmd = m.manage.Update(msg)
-		cmds = append(cmds, manCmd)
-	} else {
-		var dashCmd tea.Cmd
-		m.dashboard, dashCmd = m.dashboard.Update(msg)
-		cmds = append(cmds, dashCmd)
-	}
-	return m, tea.Batch(cmds...)
-}
-
-func (m model) View() string {
-	if m.showHelp {
-		return ui.RenderHelp(m.winWidth)
-	}
-	title := ui.TitleLine(m.fetching, m.spinner.View(), m.dashboard.Throttles())
-	switch m.screen {
-	case screenManage:
-		return title + m.manage.View()
-	default:
-		return title + m.dashboard.BodyView()
-	}
-}
-
-func (m *model) openSelectedURL() {
-	u := m.dashboard.SelectedRunURL()
-	if u == "" {
-		return
-	}
-	var c *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		c = exec.Command("open", u)
-	case "windows":
-		c = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
-	default:
-		c = exec.Command("xdg-open", u)
-	}
-	_ = c.Start()
-}
 
 func configPath() string {
 	home, err := os.UserHomeDir()
@@ -285,42 +91,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	factory := func(token string) poller.Fetcher {
+	p := poller.New(cfg, func(token string) poller.Fetcher {
 		return githubclient.New(token)
-	}
-
-	p := poller.New(cfg, factory)
+	})
 	ctx, cancel := context.WithCancel(context.Background())
+	snapshots, stopPoller := p.Start(ctx)
 
-	writeCh := make(chan state.Snapshot, 4)
-	readCh, stopPoller := p.Start(ctx)
-
-	go func() {
-		for snap := range readCh {
-			writeCh <- snap
-		}
-		close(writeCh)
-	}()
-
-	spin := bspin.New(
-		bspin.WithSpinner(bspin.MiniDot),
-		bspin.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
-	)
-
-	m := model{
-		screen:      screenDashboard,
-		dashboard:   ui.NewDashboard(p.Snapshot()).WithRerunner(ctx, rerunner{cfg: cfg}),
-		manage:      ui.NewManage(cfg),
-		cfg:         cfg,
-		pollCh:      writeCh,
-		pollCancel:  func() { cancel(); stopPoller() },
-		pollCtx:     ctx,
-		poller:      p,
-		pollChWrite: writeCh,
-		winWidth:    80,
-		fetching:    true,
-		spinner:     spin,
-	}
+	m := app.New(app.Options{
+		Config:    cfg,
+		Poller:    p,
+		Initial:   p.Snapshot(),
+		Snapshots: snapshots,
+		Ctx:       ctx,
+		Stop:      func() { cancel(); stopPoller() },
+	})
 
 	prog := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := prog.Run(); err != nil {

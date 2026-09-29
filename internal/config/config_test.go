@@ -501,3 +501,17 @@ name = "second"
 		t.Error("HasRepo should skip the excluded index")
 	}
 }
+
+func TestCloneIsIndependent(t *testing.T) {
+	on := true
+	orig := &Config{Repos: []Repo{{Owner: "o", Name: "a", Workflows: []string{"CI"}, Enabled: &on}}}
+	c := orig.Clone()
+
+	orig.Repos[0].Workflows[0] = "Deploy"
+	*orig.Repos[0].Enabled = false
+	orig.Repos = append(orig.Repos, Repo{Owner: "o", Name: "b"})
+
+	if len(c.Repos) != 1 || c.Repos[0].Workflows[0] != "CI" || !c.Repos[0].IsEnabled() {
+		t.Errorf("clone changed with the original: %+v", c.Repos)
+	}
+}
