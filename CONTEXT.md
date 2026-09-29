@@ -61,9 +61,11 @@ The visual health indicator for a Repo or PR. Aggregates across all Workflows us
 | Color | Meaning | GitHub statuses |
 |---|---|---|
 | 🟢 Green | Healthy | `success`, `neutral`, `skipped` |
-| 🔴 Red | Broken or blocked | `failure`, `timed_out`, `action_required` |
-| 🟡 Yellow | In progress | `queued`, `in_progress` |
+| 🔴 Red | Broken or blocked | `failure`, `timed_out`, `action_required`, `startup_failure` |
+| 🟡 Yellow | In progress | `queued`, `in_progress`, `requested`, `waiting`, `pending` |
 | ⚪ Grey | No signal | `cancelled`, no runs yet |
+
+A Run's effective status is its conclusion once it has one, and its status until then. This one table drives the Stoplight, the Run and Job icons, which Runs `f` can re-run (a finished 🔴 Run), and stuck alerts (🔴 is a prolonged failure, 🟡 is prolonged in progress).
 
 _Avoid_: badge, indicator, light
 

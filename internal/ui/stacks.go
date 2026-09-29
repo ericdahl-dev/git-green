@@ -67,7 +67,7 @@ func groupPRs(prs []state.PRState) []prGroup {
 		}
 		g := &groups[gi]
 		g.prIdxs = append(g.prIdxs, i)
-		if stoplightPriority(pr.Stoplight) < stoplightPriority(g.stoplight) {
+		if pr.Stoplight.ActiveFirst() < g.stoplight.ActiveFirst() {
 			g.stoplight = pr.Stoplight
 		}
 	}
@@ -88,7 +88,7 @@ func groupPRs(prs []state.PRState) []prGroup {
 	}
 
 	sort.SliceStable(groups, func(a, b int) bool {
-		return stoplightPriority(groups[a].stoplight) < stoplightPriority(groups[b].stoplight)
+		return groups[a].stoplight.ActiveFirst() < groups[b].stoplight.ActiveFirst()
 	})
 	return groups
 }

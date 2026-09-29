@@ -10,6 +10,9 @@ import (
 )
 
 // ConfigChangedMsg is sent when the config has been mutated (add/edit/delete/toggle).
+// BackMsg is sent when a sub-screen wants to return to the Dashboard.
+type BackMsg struct{}
+
 type ConfigChangedMsg struct {
 	Config *config.Config
 }

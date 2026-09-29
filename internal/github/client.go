@@ -21,6 +21,14 @@ type Job struct {
 	Conclusion string
 }
 
+// Effective is the job's conclusion once it has one, and its status until then.
+func (j Job) Effective() string {
+	if j.Conclusion != "" {
+		return j.Conclusion
+	}
+	return j.Status
+}
+
 // WorkflowRun holds the latest run for a single workflow.
 type WorkflowRun struct {
 	WorkflowName string
@@ -29,6 +37,14 @@ type WorkflowRun struct {
 	HTMLURL      string
 	RunID        int64
 	Jobs         []Job
+}
+
+// Effective is the run's conclusion once it has one, and its status until then.
+func (r WorkflowRun) Effective() string {
+	if r.Conclusion != "" {
+		return r.Conclusion
+	}
+	return r.Status
 }
 
 // PR represents an open pull request.
