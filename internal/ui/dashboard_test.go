@@ -87,24 +87,6 @@ func send(t *testing.T, d Dashboard, msg tea.Msg) Dashboard {
 	return d
 }
 
-func TestRunFailed(t *testing.T) {
-	cases := map[string]bool{
-		"failure":         true,
-		"timed_out":       true,
-		"action_required": true,
-		"startup_failure": true,
-		"success":         false,
-		"skipped":         false,
-		"cancelled":       false,
-		"":                false,
-	}
-	for conclusion, want := range cases {
-		if got := runFailed(wfRun("CI", conclusion, 1)); got != want {
-			t.Errorf("runFailed(%q) = %v, want %v", conclusion, got, want)
-		}
-	}
-}
-
 func TestRerunIgnoredWhenRunIsGreen(t *testing.T) {
 	fake := &fakeRerunner{}
 	d := dashboardWith(fake, wfRun("CI", "success", 7))

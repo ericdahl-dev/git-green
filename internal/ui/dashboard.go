@@ -64,17 +64,6 @@ type rerunTarget struct {
 
 func (t rerunTarget) fullName() string { return t.owner + "/" + t.name }
 
-// runFailed reports whether a run finished in a state worth re-running. It
-// covers the conclusions the dashboard paints red plus startup_failure, which
-// is a failure GitHub reports without ever starting a job.
-func runFailed(run githubclient.WorkflowRun) bool {
-	switch run.Conclusion {
-	case "failure", "timed_out", "action_required", "startup_failure":
-		return true
-	}
-	return false
-}
-
 type rowKind int
 
 const (
@@ -147,20 +136,6 @@ func NewDashboard(snap state.Snapshot) Dashboard {
 	return d
 }
 
-// stoplightPriority returns sort order: yellow (active) first, then red, green, grey.
-func stoplightPriority(s aggregator.Stoplight) int {
-	switch s {
-	case aggregator.StoplightYellow:
-		return 0
-	case aggregator.StoplightRed:
-		return 1
-	case aggregator.StoplightGreen:
-		return 2
-	default:
-		return 3
-	}
-}
-
 func (d *Dashboard) buildRows() []flatRow {
 	// Build sorted repo index order: yellow first, then red, green, grey.
 	repoOrder := make([]int, len(d.snapshot.Repos))
@@ -168,8 +143,8 @@ func (d *Dashboard) buildRows() []flatRow {
 		repoOrder[i] = i
 	}
 	sort.SliceStable(repoOrder, func(a, b int) bool {
-		pa := stoplightPriority(d.snapshot.Repos[repoOrder[a]].Stoplight)
-		pb := stoplightPriority(d.snapshot.Repos[repoOrder[b]].Stoplight)
+		pa := d.snapshot.Repos[repoOrder[a]].Stoplight.ActiveFirst()
+		pb := d.snapshot.Repos[repoOrder[b]].Stoplight.ActiveFirst()
 		return pa < pb
 	})
 
@@ -477,7 +452,8 @@ func (d Dashboard) selectedRerunTarget() *rerunTarget {
 	row := d.rows[d.cursor]
 	repo := d.snapshot.Repos[row.repoIdx]
 	for _, run := range d.rowRuns(row) {
-		if !runFailed(run) || run.RunID == 0 {
+		// Only a finished, red Run can be re-run; one still going is yellow.
+		if aggregator.Of(run.Conclusion) != aggregator.StoplightRed || run.RunID == 0 {
 			continue
 		}
 		return &rerunTarget{
@@ -658,17 +634,9 @@ func renderBranchSection(r state.RepoState) string {
 	branch := r.BranchName()
 	out := staleStyle.Render(branchIndent+"branch: "+branch) + "\n"
 	for _, run := range r.Runs {
-		status := run.Conclusion
-		if status == "" {
-			status = run.Status
-		}
-		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", wfIndent, runIcon(run.Effective()), run.WorkflowName)) + "\n"
 		for _, job := range run.Jobs {
-			jobStatus := job.Conclusion
-			if jobStatus == "" {
-				jobStatus = job.Status
-			}
-			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, runIcon(job.Effective()), job.Name)
 		}
 	}
 	return out
@@ -681,17 +649,9 @@ func renderPRRuns(pr state.PRState, indent string) string {
 	jobIndent := indent + "    "
 	out := ""
 	for _, run := range pr.Runs {
-		status := run.Conclusion
-		if status == "" {
-			status = run.Status
-		}
-		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", indent, workflowStatusIcon(status), run.WorkflowName)) + "\n"
+		out += wfStyle.Render(fmt.Sprintf("%s%s  %s", indent, runIcon(run.Effective()), run.WorkflowName)) + "\n"
 		for _, job := range run.Jobs {
-			jobStatus := job.Conclusion
-			if jobStatus == "" {
-				jobStatus = job.Status
-			}
-			out += fmt.Sprintf("%s%s  %s\n", jobIndent, jobStatusIcon(jobStatus), job.Name)
+			out += fmt.Sprintf("%s%s  %s\n", jobIndent, runIcon(job.Effective()), job.Name)
 		}
 	}
 	return out
@@ -724,21 +684,17 @@ func workflowSummary(r state.RepoState) string {
 		return "no runs"
 	}
 	for _, run := range r.Runs {
-		s := run.Conclusion
-		if s == "" {
-			s = run.Status
-		}
-		if aggregator.Aggregate([]aggregator.RunStatus{aggregator.RunStatus(s)}) == r.Stoplight {
-			if s == "" {
-				s = "unknown"
-			}
-			return fmt.Sprintf("%s · %s", run.WorkflowName, s)
+		if aggregator.Of(run.Effective()) == r.Stoplight {
+			return runSummary(run)
 		}
 	}
-	run := r.Runs[0]
-	s := run.Conclusion
+	return runSummary(r.Runs[0])
+}
+
+func runSummary(run githubclient.WorkflowRun) string {
+	s := run.Effective()
 	if s == "" {
-		s = run.Status
+		s = "unknown"
 	}
 	return fmt.Sprintf("%s · %s", run.WorkflowName, s)
 }

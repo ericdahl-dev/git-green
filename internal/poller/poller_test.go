@@ -593,3 +593,25 @@ func TestRateLimitBacksOffUntilReset(t *testing.T) {
 		t.Error("did not resume polling after the reset time")
 	}
 }
+
+// Stuck follows the Stoplight: every red conclusion is a failure and every
+// yellow status is still going, not just failure/timed_out and in_progress.
+func TestRunsStuckReasonFollowsStoplight(t *testing.T) {
+	cases := []struct {
+		run    githubclient.WorkflowRun
+		stuck  bool
+		reason string
+	}{
+		{githubclient.WorkflowRun{Status: "completed", Conclusion: "action_required"}, true, "prolonged_failure"},
+		{githubclient.WorkflowRun{Status: "completed", Conclusion: "startup_failure"}, true, "prolonged_failure"},
+		{githubclient.WorkflowRun{Status: "queued"}, true, "prolonged_in_progress"},
+		{githubclient.WorkflowRun{Status: "completed", Conclusion: "success"}, false, ""},
+		{githubclient.WorkflowRun{Status: "completed", Conclusion: "cancelled"}, false, ""},
+	}
+	for _, tc := range cases {
+		stuck, reason := runsStuckReason([]githubclient.WorkflowRun{tc.run})
+		if stuck != tc.stuck || reason != tc.reason {
+			t.Errorf("%s/%s: got (%v, %q), want (%v, %q)", tc.run.Status, tc.run.Conclusion, stuck, reason, tc.stuck, tc.reason)
+		}
+	}
+}

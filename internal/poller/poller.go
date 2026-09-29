@@ -428,33 +428,14 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	runs := data.BranchRuns
 	prRuns := data.PRRuns
 
-	// Aggregate stoplight from default-branch runs.
-	statuses := make([]aggregator.RunStatus, 0, len(runs))
-	for _, r := range runs {
-		s := r.Conclusion
-		if s == "" {
-			s = r.Status
-		}
-		statuses = append(statuses, aggregator.RunStatus(s))
-	}
-
 	// Build PRStates.
 	prStates := make([]state.PRState, 0, len(prRuns))
 	for _, pr := range prRuns {
-		prStatuses := make([]aggregator.RunStatus, 0, len(pr.Runs))
-		for _, r := range pr.Runs {
-			s := r.Conclusion
-			if s == "" {
-				s = r.Status
-			}
-			prStatuses = append(prStatuses, aggregator.RunStatus(s))
-		}
-
 		prStates = append(prStates, state.PRState{
 			Number:    pr.PR.Number,
 			Title:     pr.PR.Title,
 			HTMLURL:   pr.PR.HTMLURL,
-			Stoplight: aggregator.Aggregate(prStatuses),
+			Stoplight: aggregator.Runs(pr.Runs),
 			Runs:      pr.Runs,
 			Mergeable: pr.PR.Mergeable,
 			Stack:     pr.PR.Stack,
@@ -466,7 +447,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		Owner:     repo.Owner,
 		Name:      repo.Name,
 		Branch:    data.ResolvedBranch,
-		Stoplight: aggregator.Aggregate(statuses),
+		Stoplight: aggregator.Runs(runs),
 		Runs:      runs,
 		PRs:       prStates,
 		StaleAt:   nil,
@@ -587,15 +568,7 @@ func (p *Poller) evaluateStuck(repos []state.RepoState) []webhooks.Event {
 
 // branchStuckReason returns whether the branch is stuck and why.
 func (p *Poller) branchStuckReason(rs *state.RepoState) (bool, string) {
-	for _, run := range rs.Runs {
-		if run.Conclusion == "failure" || run.Conclusion == "timed_out" {
-			return true, "prolonged_failure"
-		}
-		if run.Status == "in_progress" {
-			return true, "prolonged_in_progress"
-		}
-	}
-	return false, ""
+	return runsStuckReason(rs.Runs)
 }
 
 // prStuckReason returns whether the PR is stuck and why.
@@ -603,11 +576,17 @@ func (p *Poller) prStuckReason(pr *state.PRState) (bool, string) {
 	if pr.Mergeable == "dirty" || pr.Mergeable == "conflicting" {
 		return true, "conflict"
 	}
-	for _, run := range pr.Runs {
-		if run.Conclusion == "failure" || run.Conclusion == "timed_out" {
+	return runsStuckReason(pr.Runs)
+}
+
+// runsStuckReason reports the first Run that is failing or still going, which
+// is what "stuck" means once it has lasted past the threshold.
+func runsStuckReason(runs []githubclient.WorkflowRun) (bool, string) {
+	for _, run := range runs {
+		switch aggregator.Of(run.Effective()) {
+		case aggregator.StoplightRed:
 			return true, "prolonged_failure"
-		}
-		if run.Status == "in_progress" {
+		case aggregator.StoplightYellow:
 			return true, "prolonged_in_progress"
 		}
 	}

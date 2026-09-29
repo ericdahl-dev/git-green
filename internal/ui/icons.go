@@ -3,6 +3,7 @@ package ui
 import (
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 )
 
@@ -13,21 +14,18 @@ var (
 	jobFaint  = lipgloss.NewStyle().Faint(true)
 )
 
-func workflowStatusIcon(status string) string {
-	switch status {
-	case "success", "neutral", "skipped":
+// runIcon marks a Run or Job by its effective status, in its Stoplight colour.
+func runIcon(status string) string {
+	switch aggregator.Of(status) {
+	case aggregator.StoplightGreen:
 		return jobGreen.Render("✓")
-	case "failure", "timed_out", "action_required":
+	case aggregator.StoplightRed:
 		return jobRed.Render("✗")
-	case "queued", "in_progress":
+	case aggregator.StoplightYellow:
 		return jobYellow.Render("●")
 	default:
 		return jobFaint.Render("○")
 	}
-}
-
-func jobStatusIcon(status string) string {
-	return workflowStatusIcon(status)
 }
 
 // reviewGlyph marks a PR's review state after its number, with a leading

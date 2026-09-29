@@ -1,67 +1,77 @@
 package aggregator
 
-import "testing"
+import (
+	"sort"
+	"testing"
 
-func TestStatusMappings(t *testing.T) {
-	cases := []struct {
-		status   RunStatus
-		expected Stoplight
-	}{
-		{StatusSuccess, StoplightGreen},
-		{StatusNeutral, StoplightGreen},
-		{StatusSkipped, StoplightGreen},
-		{StatusFailure, StoplightRed},
-		{StatusTimedOut, StoplightRed},
-		{StatusActionRequired, StoplightRed},
-		{StatusQueued, StoplightYellow},
-		{StatusInProgress, StoplightYellow},
-		{StatusCancelled, StoplightGrey},
+	githubclient "github.com/ericdahl-dev/git-green/internal/github"
+)
+
+func TestOfMapsEveryStatus(t *testing.T) {
+	cases := map[string]Stoplight{
+		"success":         StoplightGreen,
+		"neutral":         StoplightGreen,
+		"skipped":         StoplightGreen,
+		"failure":         StoplightRed,
+		"timed_out":       StoplightRed,
+		"action_required": StoplightRed,
+		"startup_failure": StoplightRed,
+		"queued":          StoplightYellow,
+		"in_progress":     StoplightYellow,
+		"requested":       StoplightYellow,
+		"waiting":         StoplightYellow,
+		"pending":         StoplightYellow,
+		"cancelled":       StoplightGrey,
+		"stale":           StoplightGrey,
+		"":                StoplightGrey,
 	}
-	for _, tc := range cases {
-		got := Aggregate([]RunStatus{tc.status})
-		if got != tc.expected {
-			t.Errorf("status %q: expected %v, got %v", tc.status, tc.expected, got)
+	for status, want := range cases {
+		if got := Of(status); got != want {
+			t.Errorf("Of(%q) = %v, want %v", status, got, want)
 		}
 	}
 }
 
-func TestEmptyReturnsGrey(t *testing.T) {
-	if got := Aggregate(nil); got != StoplightGrey {
-		t.Errorf("expected grey for empty, got %v", got)
+func run(status, conclusion string) githubclient.WorkflowRun {
+	return githubclient.WorkflowRun{Status: status, Conclusion: conclusion}
+}
+
+func TestRunsIsWorstCase(t *testing.T) {
+	cases := []struct {
+		name string
+		runs []githubclient.WorkflowRun
+		want Stoplight
+	}{
+		{"no runs", nil, StoplightGrey},
+		{"all cancelled", []githubclient.WorkflowRun{run("completed", "cancelled"), run("completed", "cancelled")}, StoplightGrey},
+		{"green and running", []githubclient.WorkflowRun{run("completed", "success"), run("in_progress", "")}, StoplightYellow},
+		{"red beats everything", []githubclient.WorkflowRun{run("completed", "success"), run("in_progress", ""), run("completed", "failure")}, StoplightRed},
+		{"red beats queued", []githubclient.WorkflowRun{run("queued", ""), run("completed", "timed_out")}, StoplightRed},
+	}
+	for _, tc := range cases {
+		if got := Runs(tc.runs); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
-func TestAllCancelledReturnsGrey(t *testing.T) {
-	got := Aggregate([]RunStatus{StatusCancelled, StatusCancelled})
-	if got != StoplightGrey {
-		t.Errorf("expected grey, got %v", got)
+// A finished run reports its conclusion; one still going only has a status.
+func TestRunsReadsConclusionBeforeStatus(t *testing.T) {
+	if got := Runs([]githubclient.WorkflowRun{run("completed", "failure")}); got != StoplightRed {
+		t.Errorf("completed/failure: got %v, want red", got)
+	}
+	if got := Runs([]githubclient.WorkflowRun{run("in_progress", "")}); got != StoplightYellow {
+		t.Errorf("in_progress: got %v, want yellow", got)
 	}
 }
 
-func TestMixedGreenYellowReturnsYellow(t *testing.T) {
-	got := Aggregate([]RunStatus{StatusSuccess, StatusInProgress})
-	if got != StoplightYellow {
-		t.Errorf("expected yellow, got %v", got)
-	}
-}
-
-func TestAnyRedOverridesAll(t *testing.T) {
-	got := Aggregate([]RunStatus{StatusSuccess, StatusInProgress, StatusFailure})
-	if got != StoplightRed {
-		t.Errorf("expected red, got %v", got)
-	}
-}
-
-func TestRedBeatsYellow(t *testing.T) {
-	got := Aggregate([]RunStatus{StatusQueued, StatusTimedOut})
-	if got != StoplightRed {
-		t.Errorf("expected red, got %v", got)
-	}
-}
-
-func TestGreenOnlyReturnsGreen(t *testing.T) {
-	got := Aggregate([]RunStatus{StatusSuccess, StatusNeutral, StatusSkipped})
-	if got != StoplightGreen {
-		t.Errorf("expected green, got %v", got)
+func TestActiveFirstOrder(t *testing.T) {
+	lights := []Stoplight{StoplightGrey, StoplightGreen, StoplightRed, StoplightYellow}
+	sort.Slice(lights, func(a, b int) bool { return lights[a].ActiveFirst() < lights[b].ActiveFirst() })
+	want := []Stoplight{StoplightYellow, StoplightRed, StoplightGreen, StoplightGrey}
+	for i := range want {
+		if lights[i] != want[i] {
+			t.Fatalf("got %v, want %v", lights, want)
+		}
 	}
 }
