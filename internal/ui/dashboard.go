@@ -609,7 +609,7 @@ func (d Dashboard) BodyView() string {
 				indent = stackPRIndent
 				position = fmt.Sprintf("%d/%d  ", pr.Stack.Position, pr.Stack.Size)
 			}
-			line := fmt.Sprintf("%s  %sPR #%d · %s", pr.Stoplight.String(), position, pr.Number, pr.Title)
+			line := fmt.Sprintf("%s  %sPR #%d%s · %s", pr.Stoplight.String(), position, pr.Number, reviewGlyph(pr.Review), pr.Title)
 			if selected {
 				out += selectedStyle.Render(indent+tri+" "+line) + "\n"
 			} else {

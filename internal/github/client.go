@@ -39,6 +39,7 @@ type PR struct {
 	HTMLURL   string
 	Mergeable string // "clean", "conflicting", "unknown", or "" if not yet computed
 	Stack     *Stack // non-nil when the PR is part of a stack
+	Review    Review
 }
 
 // PRRun groups an open PR with its workflow runs.
@@ -178,16 +179,16 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 		return RepoData{}, fmt.Errorf("listing PRs for %s/%s: %w", q.Owner, q.Name, err)
 	}
 
-	// Stack rows only render under an expanded repo, and a stack needs at
-	// least two PRs, so anything else is not worth the extra call. A failure
-	// here costs only the grouping, never the CI data.
-	var stacks map[int]Stack
-	if q.Detail && len(prs) > 1 {
-		fetched, err := c.fetchStacks(ctx, q.Owner, q.Name)
+	// Stack and review state only render under an expanded repo, so a
+	// collapsed one skips the query. A failure here costs only the grouping
+	// and review glyphs, never the CI data.
+	var meta map[int]prMeta
+	if q.Detail && len(prs) > 0 {
+		fetched, err := c.fetchPRMeta(ctx, q.Owner, q.Name)
 		if err != nil {
-			logx.Debug("stacks unavailable", "repo", q.Owner+"/"+q.Name, "err", err)
+			logx.Debug("PR metadata unavailable", "repo", q.Owner+"/"+q.Name, "err", err)
 		} else {
-			stacks = fetched
+			meta = fetched
 		}
 	}
 
@@ -203,8 +204,9 @@ func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 			HTMLURL:   pr.GetHTMLURL(),
 			Mergeable: pr.GetMergeableState(),
 		}
-		if st, ok := stacks[p.Number]; ok {
-			p.Stack = &st
+		if m, ok := meta[p.Number]; ok {
+			p.Stack = m.Stack
+			p.Review = m.Review
 		}
 		var runs []WorkflowRun
 		if q.Detail {
