@@ -143,6 +143,21 @@ skipped by **Pacing** is not stale — nothing failed, it is simply not due yet.
 
 _Avoid_: refresh, sync, watch
 
+## Stuck alert
+
+A webhook POST (`branch_stuck` or `pr_stuck`) sent when a Repo's branch or one
+of its PRs has stayed bad for the stuck threshold (`stuck_threshold_minutes`,
+default 30). Bad means a 🔴 Run (`prolonged_failure`), a 🟡 Run
+(`prolonged_in_progress`), or, for a PR, a merge conflict (`conflict`).
+
+- Fires once per incident. Recovering re-arms it, and a changed reason is a
+  new incident with a fresh clock.
+- A collapsed Repo fetches no PR Runs; that is not a recovery, so the clock
+  keeps running.
+- Delivered in the background: a slow endpoint never holds up polling.
+
+_Avoid_: notification, stuck event
+
 ## Pacing
 
 The adjustment of poll frequency to a token's remaining GitHub REST budget.

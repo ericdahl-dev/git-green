@@ -7,11 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/ericdahl-dev/git-green/internal/config"
+	"github.com/ericdahl-dev/git-green/internal/logx"
 )
 
 // PRInfo carries PR metadata in an event payload.
@@ -23,14 +23,14 @@ type PRInfo struct {
 
 // Event is the JSON payload POSTed to each webhook.
 type Event struct {
-	Event      string     `json:"event"`
-	Reason     string     `json:"reason"`
-	Repo       string     `json:"repo"`
-	PR         *PRInfo    `json:"pr,omitempty"`
-	Workflow   string     `json:"workflow"`
-	RunURL     string     `json:"run_url"`
-	StuckSince time.Time  `json:"stuck_since"`
-	Timestamp  time.Time  `json:"timestamp"`
+	Event      string    `json:"event"`
+	Reason     string    `json:"reason"`
+	Repo       string    `json:"repo"`
+	PR         *PRInfo   `json:"pr,omitempty"`
+	Workflow   string    `json:"workflow"`
+	RunURL     string    `json:"run_url"`
+	StuckSince time.Time `json:"stuck_since"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // Dispatcher sends webhook events to configured endpoints.
@@ -47,8 +47,29 @@ func New(hooks []config.Webhook) *Dispatcher {
 	}
 }
 
-// Dispatch POSTs evt to all configured webhooks. Failures are logged but not
-// returned — they must not interrupt the poll cycle.
+// Send delivers evts to every configured webhook in the background and
+// returns at once, so a slow or hanging endpoint never holds up polling. The
+// returned channel closes when delivery has finished, for callers (tests) that
+// need to wait.
+func (d *Dispatcher) Send(evts []Event) <-chan struct{} {
+	done := make(chan struct{})
+	if len(d.hooks) == 0 || len(evts) == 0 {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		for _, evt := range evts {
+			d.Dispatch(evt)
+		}
+	}()
+	return done
+}
+
+// Dispatch POSTs evt to all configured webhooks and waits for them. Failures
+// are logged but not returned: an alert that cannot be delivered must not
+// interrupt polling. Logging goes through logx, never plain stderr, which
+// would scribble over the full-screen dashboard.
 func (d *Dispatcher) Dispatch(evt Event) {
 	if len(d.hooks) == 0 {
 		return
@@ -56,13 +77,13 @@ func (d *Dispatcher) Dispatch(evt Event) {
 
 	body, err := json.Marshal(evt)
 	if err != nil {
-		log.Printf("webhooks: marshal error: %v", err)
+		logx.Debug("webhook marshal failed", "err", err)
 		return
 	}
 
 	for _, wh := range d.hooks {
 		if err := d.post(wh, body); err != nil {
-			log.Printf("webhooks: POST to %s failed: %v", wh.URL, err)
+			logx.Debug("webhook POST failed", "url", wh.URL, "err", err)
 		}
 	}
 }

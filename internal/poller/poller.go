@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
+	"github.com/ericdahl-dev/git-green/internal/alerts"
 	"github.com/ericdahl-dev/git-green/internal/config"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
 	"github.com/ericdahl-dev/git-green/internal/logx"
@@ -23,15 +24,6 @@ type Fetcher interface {
 // ClientFactory creates a Fetcher for a given token.
 type ClientFactory func(token string) Fetcher
 
-// stuckEntry records when a single condition was first seen in a bad state and
-// whether its webhook has already fired, so a wedged repo alerts once rather
-// than on every poll cycle.
-type stuckEntry struct {
-	since   time.Time
-	reason  string
-	alerted bool
-}
-
 // Poller orchestrates periodic fetches across all configured repos.
 type Poller struct {
 	cfg        *config.Config
@@ -39,8 +31,9 @@ type Poller struct {
 	dispatcher *webhooks.Dispatcher
 	mu         sync.Mutex
 	current    []state.RepoState
-	// stuck is keyed by repo + condition (see stuckKey) and guarded by mu.
-	stuck map[string]*stuckEntry
+	// alerts decides when a branch or PR has been stuck long enough to send
+	// a webhook. Only the fetch loop touches it.
+	alerts *alerts.Watcher
 	// expanded holds the "owner/name" of repos whose rows are open in the UI.
 	// Only those fetch per-run jobs and per-PR runs; see RepoQuery.Detail.
 	expanded map[string]bool
@@ -77,7 +70,7 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 		factory:    factory,
 		dispatcher: webhooks.New(cfg.Webhooks),
 		current:    repos,
-		stuck:      make(map[string]*stuckEntry),
+		alerts:     alerts.NewWatcher(stuckThreshold(cfg)),
 		expanded:   make(map[string]bool),
 		now:        time.Now,
 		refresh:    make(chan struct{}, 1),
@@ -173,7 +166,12 @@ func (p *Poller) applyPending() bool {
 	}
 	p.cfg, p.pending = p.pending, nil
 	p.dispatcher = webhooks.New(p.cfg.Webhooks)
+	p.alerts.SetThreshold(stuckThreshold(p.cfg))
 	return true
+}
+
+func stuckThreshold(cfg *config.Config) time.Duration {
+	return time.Duration(cfg.Settings.StuckThresholdMinutes) * time.Minute
 }
 
 func (p *Poller) interval() time.Duration {
@@ -230,14 +228,9 @@ func (p *Poller) fetch(ctx context.Context) state.Snapshot {
 
 	p.mu.Lock()
 	p.current = results
-	// Compute events under the lock (evaluateStuck mutates p.stuck), but POST
-	// them after releasing it so a hanging endpoint cannot stall Snapshot().
-	events := p.evaluateStuck(results)
 	p.mu.Unlock()
 
-	for _, evt := range events {
-		p.dispatcher.Dispatch(evt)
-	}
+	p.dispatcher.Send(p.alerts.Observe(results, p.now()))
 
 	snap := state.New(results)
 	snap.Throttles = p.Throttles()
@@ -334,129 +327,4 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		StaleAt:   nil,
 		Err:       nil,
 	}
-}
-
-// stuckKey identifies one stuck condition: a repo's default branch, or one of
-// its open PRs.
-func stuckKey(r state.RepoState, scope string) string {
-	return r.FullName() + "#" + scope
-}
-
-// evaluateStuck folds the freshly-polled state into the stuck bookkeeping and
-// returns the events that should fire this cycle.
-//
-// A condition alerts exactly once, on the first cycle where it has been bad for
-// at least the configured threshold. Recovering prunes the entry, so the next
-// incident re-arms. Callers must hold p.mu.
-func (p *Poller) evaluateStuck(repos []state.RepoState) []webhooks.Event {
-	threshold := time.Duration(p.cfg.Settings.StuckThresholdMinutes) * time.Minute
-	now := p.now()
-	seen := make(map[string]struct{}, len(p.stuck))
-	var events []webhooks.Event
-
-	// track records one stuck condition and appends an event if this is the
-	// cycle that crosses the threshold.
-	track := func(key, reason string, build func(since time.Time) webhooks.Event) {
-		seen[key] = struct{}{}
-		entry, ok := p.stuck[key]
-		// A changed reason (an in-progress run turning into a failure) is a new
-		// condition, so restart the clock and allow a fresh alert.
-		if !ok || entry.reason != reason {
-			entry = &stuckEntry{since: now, reason: reason}
-			p.stuck[key] = entry
-		}
-		if entry.alerted || now.Sub(entry.since) < threshold {
-			return
-		}
-		entry.alerted = true
-		events = append(events, build(entry.since))
-	}
-
-	for i := range repos {
-		r := repos[i]
-
-		if stuck, reason := p.branchStuckReason(&r); stuck {
-			track(stuckKey(r, "branch"), reason, func(since time.Time) webhooks.Event {
-				runURL, workflow := "", ""
-				if len(r.Runs) > 0 {
-					runURL = r.Runs[0].HTMLURL
-					workflow = r.Runs[0].WorkflowName
-				}
-				return webhooks.Event{
-					Event:      "branch_stuck",
-					Reason:     reason,
-					Repo:       r.FullName(),
-					Workflow:   workflow,
-					RunURL:     runURL,
-					StuckSince: since,
-					Timestamp:  now,
-				}
-			})
-		}
-
-		for j := range r.PRs {
-			pr := r.PRs[j]
-			stuck, reason := p.prStuckReason(&pr)
-			if !stuck {
-				continue
-			}
-			track(stuckKey(r, fmt.Sprintf("pr-%d", pr.Number)), reason, func(since time.Time) webhooks.Event {
-				runURL, workflow := "", ""
-				if len(pr.Runs) > 0 {
-					runURL = pr.Runs[0].HTMLURL
-					workflow = pr.Runs[0].WorkflowName
-				}
-				return webhooks.Event{
-					Event:  "pr_stuck",
-					Reason: reason,
-					Repo:   r.FullName(),
-					PR: &webhooks.PRInfo{
-						Number: pr.Number,
-						Title:  pr.Title,
-						URL:    pr.HTMLURL,
-					},
-					Workflow:   workflow,
-					RunURL:     runURL,
-					StuckSince: since,
-					Timestamp:  now,
-				}
-			})
-		}
-	}
-
-	// Conditions that recovered stop being tracked, which re-arms them.
-	for key := range p.stuck {
-		if _, ok := seen[key]; !ok {
-			delete(p.stuck, key)
-		}
-	}
-
-	return events
-}
-
-// branchStuckReason returns whether the branch is stuck and why.
-func (p *Poller) branchStuckReason(rs *state.RepoState) (bool, string) {
-	return runsStuckReason(rs.Runs)
-}
-
-// prStuckReason returns whether the PR is stuck and why.
-func (p *Poller) prStuckReason(pr *state.PRState) (bool, string) {
-	if pr.Mergeable == "dirty" || pr.Mergeable == "conflicting" {
-		return true, "conflict"
-	}
-	return runsStuckReason(pr.Runs)
-}
-
-// runsStuckReason reports the first Run that is failing or still going, which
-// is what "stuck" means once it has lasted past the threshold.
-func runsStuckReason(runs []githubclient.WorkflowRun) (bool, string) {
-	for _, run := range runs {
-		switch aggregator.Of(run.Effective()) {
-		case aggregator.StoplightRed:
-			return true, "prolonged_failure"
-		case aggregator.StoplightYellow:
-			return true, "prolonged_in_progress"
-		}
-	}
-	return false, ""
 }
