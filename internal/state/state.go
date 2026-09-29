@@ -5,6 +5,7 @@ import (
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
+	"github.com/ericdahl-dev/git-green/internal/ratelimit"
 )
 
 // PRState holds CI state for a single open pull request.
@@ -48,13 +49,7 @@ func (r RepoState) IsStale() bool {
 
 // Throttle reports one token polling slower than configured because its REST
 // budget is running down.
-type Throttle struct {
-	Orgs      []string
-	Remaining int
-	Limit     int
-	Reset     time.Time
-	Interval  time.Duration
-}
+type Throttle = ratelimit.Throttle
 
 // Snapshot is an immutable view of all repo states at a point in time.
 type Snapshot struct {
