@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,40 +63,8 @@ type rerunTarget struct {
 
 func (t rerunTarget) fullName() string { return t.owner + "/" + t.name }
 
-type rowKind int
-
-const (
-	kindRepo rowKind = iota
-	kindStack
-	kindPR
-)
-
-// stackKey identifies an expanded stack. It carries the repo name rather than
-// its index because a repo's index moves when the config reloads or the
-// active-first sort shifts, which would otherwise reassign expansion state to
-// whatever repo landed on that index.
-type stackKey struct {
-	repo  string
-	stack int
-}
-
-type flatRow struct {
-	kind     rowKind
-	repoIdx  int
-	prIdx    int  // only for kindPR
-	groupIdx int  // index into the repo's prGroups, for kindStack and stacked kindPR
-	inStack  bool // kindPR rendered inside an expanded stack
-}
-
 type Dashboard struct {
-	snapshot      state.Snapshot
-	rows          []flatRow
-	cursor        int
-	repoExp       map[string]bool
-	attention     map[string]bool // last seen needsAttention per repo, for auto-expand
-	stackExp      map[stackKey]bool
-	prExp         map[[2]int]bool
-	groups        map[int][]prGroup // repoIdx -> its PR groups, rebuilt with rows
+	tree          tree
 	lastActivity  time.Time
 	selectionFade bool
 
@@ -124,55 +91,7 @@ func (d Dashboard) AwaitingConfirm() bool {
 }
 
 func NewDashboard(snap state.Snapshot) Dashboard {
-	d := Dashboard{
-		snapshot:     snap,
-		repoExp:      make(map[string]bool),
-		attention:    make(map[string]bool),
-		stackExp:     make(map[stackKey]bool),
-		prExp:        make(map[[2]int]bool),
-		lastActivity: time.Now(),
-	}
-	d.rows = d.buildRows()
-	return d
-}
-
-func (d *Dashboard) buildRows() []flatRow {
-	// Build sorted repo index order: yellow first, then red, green, grey.
-	repoOrder := make([]int, len(d.snapshot.Repos))
-	for i := range repoOrder {
-		repoOrder[i] = i
-	}
-	sort.SliceStable(repoOrder, func(a, b int) bool {
-		pa := d.snapshot.Repos[repoOrder[a]].Stoplight.ActiveFirst()
-		pb := d.snapshot.Repos[repoOrder[b]].Stoplight.ActiveFirst()
-		return pa < pb
-	})
-
-	d.groups = make(map[int][]prGroup, len(d.snapshot.Repos))
-	var rows []flatRow
-	for _, i := range repoOrder {
-		r := d.snapshot.Repos[i]
-		groups := groupPRs(r.PRs)
-		d.groups[i] = groups
-		rows = append(rows, flatRow{kind: kindRepo, repoIdx: i})
-		if !d.repoExp[r.FullName()] {
-			continue
-		}
-		for gi, g := range groups {
-			if !g.isStack() {
-				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: g.prIdxs[0], groupIdx: gi})
-				continue
-			}
-			rows = append(rows, flatRow{kind: kindStack, repoIdx: i, groupIdx: gi})
-			if !d.stackExp[stackKey{repo: r.FullName(), stack: g.stackNum}] {
-				continue
-			}
-			for _, j := range g.prIdxs {
-				rows = append(rows, flatRow{kind: kindPR, repoIdx: i, prIdx: j, groupIdx: gi, inStack: true})
-			}
-		}
-	}
-	return rows
+	return Dashboard{tree: newTree(snap), lastActivity: time.Now()}
 }
 
 // ExpandedReposMsg carries the repos whose rows are currently open, so the
@@ -182,16 +101,7 @@ type ExpandedReposMsg struct {
 }
 
 // ExpandedRepos returns the "owner/name" of every currently expanded repo.
-func (d Dashboard) ExpandedRepos() []string {
-	var out []string
-	for name, open := range d.repoExp {
-		if open {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
+func (d Dashboard) ExpandedRepos() []string { return d.tree.expandedRepos() }
 
 func expandedChangedCmd(repos []string) tea.Cmd {
 	return func() tea.Msg { return ExpandedReposMsg{Repos: repos} }
@@ -230,46 +140,16 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 		d.selectionFade = false
 		switch msg.String() {
 		case "up", "k":
-			if d.cursor > 0 {
-				d.cursor--
-			}
+			d.tree.move(-1)
 		case "down", "j":
-			if d.cursor < len(d.rows)-1 {
-				d.cursor++
-			}
+			d.tree.move(1)
 		case "enter", " ":
-			if len(d.rows) == 0 {
-				break
-			}
-			row := d.rows[d.cursor]
-			switch row.kind {
-			case kindRepo:
-				key := d.snapshot.Repos[row.repoIdx].FullName()
-				d.repoExp[key] = !d.repoExp[key]
-				d.rows = d.buildRows()
-				if d.cursor >= len(d.rows) {
-					d.cursor = len(d.rows) - 1
-				}
-				// Expanding a repo asks for detail the poller was not
-				// fetching, so tell it and refresh rather than leaving the
-				// row empty until the next tick.
+			// Expanding a Repo asks for detail the poller was not fetching,
+			// so tell it and refresh rather than leaving the row empty until
+			// the next tick. Stacks and PRs live under an already-expanded
+			// Repo, so their detail is on hand.
+			if d.tree.toggle() {
 				return d, tea.Batch(selectionTimeoutCmd(), expandedChangedCmd(d.ExpandedRepos()))
-			case kindStack:
-				g := d.group(row)
-				if g == nil {
-					break
-				}
-				// A stack's members live under an already-expanded repo, so
-				// their detail is on hand — no refetch needed here.
-				key := stackKey{repo: d.snapshot.Repos[row.repoIdx].FullName(), stack: g.stackNum}
-				d.stackExp[key] = !d.stackExp[key]
-				d.rows = d.buildRows()
-				if d.cursor >= len(d.rows) {
-					d.cursor = len(d.rows) - 1
-				}
-			case kindPR:
-				key := [2]int{row.repoIdx, row.prIdx}
-				d.prExp[key] = !d.prExp[key]
 			}
 		case "f":
 			// Only a row whose run actually failed can be re-run.
@@ -296,11 +176,7 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 	case rerunResultExpiredMsg:
 		d.clearRerunResult()
 	case state.Snapshot:
-		sel := d.selectedRow()
-		d.snapshot = msg
-		opened := d.autoExpand()
-		d.rows = d.buildRows()
-		d.restoreCursor(sel)
+		opened := d.tree.update(msg)
 		var cmd tea.Cmd
 		if opened {
 			// Newly opened repos need the job and PR-run detail the poller
@@ -315,111 +191,6 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 		return d, cmd
 	}
 	return d, nil
-}
-
-// needsAttention reports whether a repo has CI running or failing, on its
-// branch or on any PR the dashboard knows about.
-func needsAttention(r state.RepoState) bool {
-	active := func(s aggregator.Stoplight) bool {
-		return s == aggregator.StoplightYellow || s == aggregator.StoplightRed
-	}
-	if active(r.Stoplight) {
-		return true
-	}
-	for _, p := range r.PRs {
-		if active(p.Stoplight) {
-			return true
-		}
-	}
-	return false
-}
-
-// autoExpand opens repos that start needing attention and closes repos that
-// stop. It acts only when that state changes (or a repo first appears), so a
-// row the user opened or closed by hand stays that way until its CI moves.
-// It reports whether any repo was opened.
-func (d *Dashboard) autoExpand() bool {
-	opened := false
-	seen := make(map[string]bool, len(d.snapshot.Repos))
-	for _, r := range d.snapshot.Repos {
-		name := r.FullName()
-		seen[name] = true
-		now := needsAttention(r)
-		if was, known := d.attention[name]; known && was == now {
-			continue
-		}
-		d.attention[name] = now
-		if now && !d.repoExp[name] {
-			opened = true
-		}
-		d.repoExp[name] = now
-	}
-	for name := range d.attention {
-		if !seen[name] {
-			delete(d.attention, name)
-		}
-	}
-	return opened
-}
-
-// rowRef identifies a row by what it shows rather than by position, so the
-// cursor can follow it when rows are inserted above it.
-type rowRef struct {
-	repo  string
-	kind  rowKind
-	num   int // PR or stack number
-	valid bool
-}
-
-func (d Dashboard) selectedRow() rowRef {
-	if d.cursor < 0 || d.cursor >= len(d.rows) {
-		return rowRef{}
-	}
-	return d.refFor(d.rows[d.cursor])
-}
-
-func (d Dashboard) refFor(row flatRow) rowRef {
-	if row.repoIdx >= len(d.snapshot.Repos) {
-		return rowRef{}
-	}
-	r := d.snapshot.Repos[row.repoIdx]
-	ref := rowRef{repo: r.FullName(), kind: row.kind, valid: true}
-	switch row.kind {
-	case kindPR:
-		if row.prIdx < len(r.PRs) {
-			ref.num = r.PRs[row.prIdx].Number
-		}
-	case kindStack:
-		if g := d.group(row); g != nil {
-			ref.num = g.stackNum
-		}
-	}
-	return ref
-}
-
-// restoreCursor moves the cursor back onto sel after a rebuild, falling back
-// to sel's repo row, then to clamping.
-func (d *Dashboard) restoreCursor(sel rowRef) {
-	if sel.valid {
-		repoRow := -1
-		for i, row := range d.rows {
-			ref := d.refFor(row)
-			if ref == sel {
-				d.cursor = i
-				return
-			}
-			if repoRow < 0 && ref.kind == kindRepo && ref.repo == sel.repo {
-				repoRow = i
-			}
-		}
-		if repoRow >= 0 {
-			d.cursor = repoRow
-			return
-		}
-	}
-	if d.cursor >= len(d.rows) && len(d.rows) > 0 {
-		d.cursor = len(d.rows) - 1
-	}
 }
 
 // startRerun moves out of the confirmation and fires the re-run in a command.
@@ -446,19 +217,18 @@ func (d *Dashboard) clearRerunResult() {
 // selectedRerunTarget returns the first failed run on the selected row, or nil
 // when the row is green, still running, or has no runs at all.
 func (d Dashboard) selectedRerunTarget() *rerunTarget {
-	if len(d.rows) == 0 {
+	n, ok := d.tree.selected()
+	if !ok {
 		return nil
 	}
-	row := d.rows[d.cursor]
-	repo := d.snapshot.Repos[row.repoIdx]
-	for _, run := range d.rowRuns(row) {
+	for _, run := range n.runs() {
 		// Only a finished, red Run can be re-run; one still going is yellow.
 		if aggregator.Of(run.Conclusion) != aggregator.StoplightRed || run.RunID == 0 {
 			continue
 		}
 		return &rerunTarget{
-			owner:    repo.Owner,
-			name:     repo.Name,
+			owner:    n.repo.Owner,
+			name:     n.repo.Name,
 			runID:    run.RunID,
 			workflow: run.WorkflowName,
 		}
@@ -466,61 +236,25 @@ func (d Dashboard) selectedRerunTarget() *rerunTarget {
 	return nil
 }
 
-// group returns the prGroup a stack row or stacked PR row belongs to.
-func (d Dashboard) group(row flatRow) *prGroup {
-	groups := d.groups[row.repoIdx]
-	if row.groupIdx >= len(groups) {
-		return nil
-	}
-	return &groups[row.groupIdx]
-}
-
-// rowRuns returns the workflow runs a row stands for. A stack row stands for
-// every run across its members, bottom to top, so re-running and opening from a
-// collapsed stack still reach the layer that needs attention.
-func (d Dashboard) rowRuns(row flatRow) []githubclient.WorkflowRun {
-	repo := d.snapshot.Repos[row.repoIdx]
-	switch row.kind {
-	case kindStack:
-		g := d.group(row)
-		if g == nil {
-			return nil
-		}
-		var runs []githubclient.WorkflowRun
-		for _, j := range g.prIdxs {
-			if j < len(repo.PRs) {
-				runs = append(runs, repo.PRs[j].Runs...)
-			}
-		}
-		return runs
-	case kindPR:
-		if row.prIdx >= len(repo.PRs) {
-			return nil
-		}
-		return repo.PRs[row.prIdx].Runs
-	default:
-		return repo.Runs
-	}
-}
-
 // Throttles reports the tokens the poller has slowed down, for the title bar.
-func (d Dashboard) Throttles() []state.Throttle { return d.snapshot.Throttles }
+func (d Dashboard) Throttles() []state.Throttle { return d.tree.snapshot.Throttles }
 
 func (d Dashboard) SelectedRepo() *state.RepoState {
-	if len(d.rows) == 0 {
+	n, ok := d.tree.selected()
+	if !ok {
 		return nil
 	}
-	r := d.snapshot.Repos[d.rows[d.cursor].repoIdx]
-	return &r
+	return &n.repo
 }
 
 // SelectedRunURL returns the HTML URL of the primary workflow run for the
-// selected repo row or PR row, if any.
+// selected row, if any.
 func (d Dashboard) SelectedRunURL() string {
-	if len(d.rows) == 0 {
+	n, ok := d.tree.selected()
+	if !ok {
 		return ""
 	}
-	runs := d.rowRuns(d.rows[d.cursor])
+	runs := n.runs()
 	if len(runs) == 0 {
 		return ""
 	}
@@ -531,17 +265,17 @@ func (d Dashboard) SelectedRunURL() string {
 func (d Dashboard) BodyView() string {
 	out := ""
 
-	if len(d.snapshot.Repos) == 0 {
+	if len(d.tree.snapshot.Repos) == 0 {
 		out += staleStyle.Render("  No repos configured.") + "\n"
 	}
 
-	for rowIdx, row := range d.rows {
-		selected := rowIdx == d.cursor && !d.selectionFade
-		r := d.snapshot.Repos[row.repoIdx]
+	for rowIdx, n := range d.tree.rows {
+		selected := rowIdx == d.tree.cursor && !d.selectionFade
+		r := n.repo
+		expanded := d.tree.isExpanded(n)
 
-		switch row.kind {
+		switch n.key.kind {
 		case kindRepo:
-			expanded := d.repoExp[r.FullName()]
 			triangle := "▶"
 			if expanded {
 				triangle = "▼"
@@ -557,15 +291,11 @@ func (d Dashboard) BodyView() string {
 			}
 
 		case kindStack:
-			g := d.group(row)
-			if g == nil {
-				break
-			}
 			tri := "▶"
-			if d.stackExp[stackKey{repo: r.FullName(), stack: g.stackNum}] {
+			if expanded {
 				tri = "▼"
 			}
-			line := prIndent + tri + " " + g.title()
+			line := prIndent + tri + " " + n.group.title()
 			if selected {
 				out += selectedStyle.Render(line) + "\n"
 			} else {
@@ -573,15 +303,14 @@ func (d Dashboard) BodyView() string {
 			}
 
 		case kindPR:
-			pr := r.PRs[row.prIdx]
-			prExpanded := d.prExp[[2]int{row.repoIdx, row.prIdx}]
+			pr := n.pr
 			tri := "▶"
-			if prExpanded {
+			if expanded {
 				tri = "▼"
 			}
 			indent := prIndent
 			position := ""
-			if row.inStack {
+			if n.inStack {
 				indent = stackPRIndent
 				position = fmt.Sprintf("%d/%d  ", pr.Stack.Position, pr.Stack.Size)
 			}
@@ -591,7 +320,7 @@ func (d Dashboard) BodyView() string {
 			} else {
 				out += normalStyle.Render(indent+tri+" "+line) + "\n"
 			}
-			if prExpanded {
+			if expanded {
 				out += renderPRRuns(pr, indent+"    ")
 			}
 		}

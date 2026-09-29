@@ -15,7 +15,7 @@ func pr(n int, light aggregator.Stoplight) state.PRState {
 	return state.PRState{Number: n, Title: "pr", Stoplight: light}
 }
 
-func isOpen(d Dashboard, name string) bool { return d.repoExp["o/"+name] }
+func isOpen(d Dashboard, name string) bool { return d.tree.expanded[repoKey("o/"+name)] }
 
 func TestAutoExpandOpensActiveAndFailingRepos(t *testing.T) {
 	d := NewDashboard(state.New(nil))
@@ -84,8 +84,7 @@ func TestAutoExpandKeepsCursorOnSelectedRepo(t *testing.T) {
 		repoState("a", aggregator.StoplightRed, pr(1, aggregator.StoplightRed), pr(2, aggregator.StoplightRed)),
 		repoState("b", aggregator.StoplightGreen),
 	}))
-	row := d.rows[d.cursor]
-	if row.kind != kindRepo || d.snapshot.Repos[row.repoIdx].Name != "b" {
-		t.Errorf("cursor moved off repo b to %+v", row)
+	if n, _ := d.tree.selected(); n.key != repoKey("o/b") {
+		t.Errorf("cursor moved off repo b to %+v", n.key)
 	}
 }

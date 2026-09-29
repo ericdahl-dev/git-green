@@ -188,13 +188,13 @@ func TestSelectedRerunTargetReachesIntoACollapsedStack(t *testing.T) {
 // moveTo walks the cursor down to the first row of the given kind.
 func moveTo(t *testing.T, d Dashboard, want rowKind) Dashboard {
 	t.Helper()
-	for range d.rows {
-		if d.rows[d.cursor].kind == want {
+	for range d.tree.rows {
+		if n, _ := d.tree.selected(); n.key.kind == want {
 			return d
 		}
 		d, _ = d.Update(key("down"))
 	}
-	t.Fatalf("no row of kind %d in %d rows", want, len(d.rows))
+	t.Fatalf("no row of kind %d in %d rows", want, len(d.tree.rows))
 	return d
 }
 

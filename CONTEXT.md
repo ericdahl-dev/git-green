@@ -115,6 +115,8 @@ The Dashboard renders a two-level expandable tree:
 - **Stack row**: navigable; expand/collapse with `enter`/`space` to show its member PR rows. Its Stoplight is the most actionable of its members', and `f` and `o` act on the first failing member so a collapsed Stack still exposes what broke.
 - **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`. A Review glyph follows the PR number when there is a Review signal.
 
+Expansion and the cursor stay attached to what a row shows — the Repo by name, a Stack or PR by its number — so they survive PRs opening and closing, config reloads and active-first re-sorting.
+
 _Avoid_: detail view, drill-down screen
 
 ## Polling
