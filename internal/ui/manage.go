@@ -251,9 +251,9 @@ func (m Manage) listView() string {
 		}
 		line := fmt.Sprintf(" %s  %-40s  %s", toggle, name, branch)
 		if i == m.cursor {
-			out += selectedStyle.Render("▶" + line) + "\n"
+			out += selectedStyle.Render("▶"+line) + "\n"
 		} else {
-			out += style.Render(" " + line) + "\n"
+			out += style.Render(" "+line) + "\n"
 		}
 	}
 
