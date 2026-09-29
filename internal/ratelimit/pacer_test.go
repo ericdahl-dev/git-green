@@ -115,3 +115,34 @@ func TestPacerIgnoresOtherErrors(t *testing.T) {
 		t.Error("an ordinary error must not hold the token back")
 	}
 }
+
+// GitHub's secondary limit does not always say how long to wait. Backing off
+// anyway is what stops every following cycle from tripping it again.
+func TestPacerBacksOffASecondaryLimitWithoutRetryAfter(t *testing.T) {
+	p, c := newTestPacer()
+	if !p.Failed("tok", &github.AbuseRateLimitError{}) {
+		t.Fatal("a secondary limit must be recognised even without Retry-After")
+	}
+	if until, ok := p.LimitedUntil("tok"); !ok || !until.Equal(c.t.Add(SecondaryBackoff)) {
+		t.Errorf("LimitedUntil = %v, %v; want %v", until, ok, c.t.Add(SecondaryBackoff))
+	}
+}
+
+// A rate-limited token shows once in the title bar, not as an error on every
+// Repo that rides it.
+func TestPacerReportsRateLimitedTokens(t *testing.T) {
+	p, c := newTestPacer()
+	cycle(p, "tok", 10, Budget{Remaining: 4000, Limit: 5000, Reset: c.t.Add(time.Hour)}, "acme")
+	reset := c.t.Add(10 * time.Minute)
+	p.Failed("tok", &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: reset}}})
+
+	th := p.Throttles()
+	if len(th) != 1 || !th[0].Limited || !th[0].Reset.Equal(reset) || th[0].Orgs[0] != "acme" {
+		t.Fatalf("got %+v, want one limited throttle for acme resetting at %v", th, reset)
+	}
+
+	c.t = reset.Add(time.Second)
+	if th := p.Throttles(); len(th) != 0 {
+		t.Errorf("still reported after the reset: %+v", th)
+	}
+}

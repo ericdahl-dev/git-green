@@ -133,7 +133,9 @@ Each poll cycle makes the following API calls per enabled Repo:
 
 Disabled Repos are skipped entirely — no API calls are made for them.
 
-The Poller runs one poll cycle at a time. A force refresh (`r`, expanding a
+The Poller runs one poll cycle at a time, fetching at most 4 Repos at once:
+GitHub's secondary rate limit keys on concurrency, so a burst of every Repo
+trips it long before the hourly budget runs low. A force refresh (`r`, expanding a
 Repo) or a Repo manager edit asks for the next cycle now rather than starting
 another alongside it, and requests made while one is waiting collapse into it.
 The Poller works from its own copy of the Config file, taken on each reload.
@@ -186,8 +188,10 @@ interval   = max(configured, time to reset / affordable)
 - A healthy token is never held back: while there is budget to spare the
   formula lands below the configured interval, and the configured one wins.
 - **Rate limited**: when GitHub refuses a token anyway (a 403 with a reset,
-  or a secondary limit with retry-after), that token is held until the reset.
-  Its Repos go stale with the reason, unlike paced Repos, which just wait.
+  or a secondary limit with retry-after, or 60s when it gives none), that
+  token is held until the reset. Its Repos go stale with the reason, unlike
+  paced Repos, which just wait, and the title bar says the token is rate
+  limited and when it retries.
 
 When a token is paced below its configured interval, the title bar says so —
 which Org, how much budget is left, the pace, and when it recovers. Healthy

@@ -12,14 +12,20 @@ import (
 	"github.com/ericdahl-dev/git-green/internal/logx"
 )
 
-// Throttle reports one token polling slower than configured because its REST
-// budget is running down.
+// SecondaryBackoff is how long a token waits after GitHub's secondary (abuse)
+// limit refuses it without saying how long to wait.
+const SecondaryBackoff = time.Minute
+
+// Throttle reports one token polling slower than configured: paced because its
+// REST budget is running down, or Limited because GitHub refused it and it is
+// waiting for Reset.
 type Throttle struct {
 	Orgs      []string
 	Remaining int
 	Limit     int
 	Reset     time.Time
 	Interval  time.Duration
+	Limited   bool
 }
 
 // Pacer paces every token against its own REST budget. It is keyed by token,
@@ -119,8 +125,12 @@ func (p *Pacer) Failed(token string, err error) bool {
 	switch {
 	case errors.As(err, &rlErr):
 		until = rlErr.Rate.Reset.Time
-	case errors.As(err, &abuseErr) && abuseErr.RetryAfter != nil:
-		until = p.now().Add(*abuseErr.RetryAfter)
+	case errors.As(err, &abuseErr):
+		wait := SecondaryBackoff
+		if abuseErr.RetryAfter != nil {
+			wait = *abuseErr.RetryAfter
+		}
+		until = p.now().Add(wait)
 	}
 	if until.IsZero() {
 		return false
@@ -163,12 +173,18 @@ func (p *Pacer) EndCycle(configured time.Duration) {
 }
 
 // Throttles reports every token polling slower than configured, for the title
-// bar. Healthy tokens are omitted.
+// bar: rate-limited ones first by reset, then paced ones. Healthy tokens are
+// omitted.
 func (p *Pacer) Throttles() []Throttle {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := p.now()
 	var out []Throttle
 	for _, pc := range p.tokens {
+		if now.Before(pc.limited) {
+			out = append(out, Throttle{Orgs: sortedOrgs(pc.orgs), Reset: pc.limited, Limited: true})
+			continue
+		}
 		if pc.interval <= p.configured || !pc.budget.Known() {
 			continue
 		}

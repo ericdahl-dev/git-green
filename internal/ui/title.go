@@ -45,6 +45,11 @@ func ThrottleNotice(throttles []state.Throttle) string {
 		if orgs == "" {
 			orgs = "token"
 		}
+		if t.Limited {
+			parts = append(parts, fmt.Sprintf("⛔ %s rate limited by GitHub · retrying %s",
+				orgs, t.Reset.Local().Format("15:04")))
+			continue
+		}
 		pct := 0
 		if t.Limit > 0 {
 			pct = t.Remaining * 100 / t.Limit
