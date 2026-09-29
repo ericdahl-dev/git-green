@@ -91,8 +91,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// One client per token for the life of the app, so each keeps its ETag
+	// cache and unchanged data costs nothing from one cycle to the next.
+	var clients githubclient.Pool
 	p := poller.New(cfg, func(token string) poller.Fetcher {
-		return githubclient.New(token)
+		return clients.For(token)
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	snapshots, stopPoller := p.Start(ctx)

@@ -131,6 +131,12 @@ Each poll cycle makes the following API calls per enabled Repo:
 - 1 × `ListRepositoryWorkflowRuns` per open PR (head SHA runs)
 - 1 × `ListWorkflowJobs` per branch Workflow Run
 
+Every GET is a conditional request: the Poller keeps one client per token for
+the life of the app, and each remembers the ETag of the last response per URL.
+When nothing changed GitHub answers `304 Not Modified`, which costs no budget,
+and the stored response is used instead. A quiet dashboard therefore costs
+close to nothing, and Pacing counts only the calls that were actually spent.
+
 Disabled Repos are skipped entirely — no API calls are made for them.
 
 The Poller runs one poll cycle at a time, fetching at most 4 Repos at once:
