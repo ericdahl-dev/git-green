@@ -86,7 +86,10 @@ type fetchStats struct {
 // observe records one API response. GitHub reports the budget on every
 // response, so the last one seen is the freshest reading.
 func (s *fetchStats) observe(resp *github.Response) {
-	s.calls++
+	// A response replayed from the ETag cache was a 304, which costs nothing.
+	if resp == nil || !fromCache(resp.Response) {
+		s.calls++
+	}
 	if resp == nil || resp.Rate.Limit == 0 {
 		return
 	}
@@ -160,6 +163,9 @@ type Client struct {
 func New(token string) *Client {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(context.Background(), ts)
+	// Conditional requests make unchanged data free; see etagTransport. The
+	// GraphQL query is a POST, which the transport passes straight through.
+	tc.Transport = newETagTransport(tc.Transport, maxCachedResponses)
 	return &Client{gh: github.NewClient(tc), http: tc, graphQLURL: graphQLEndpoint}
 }
 
