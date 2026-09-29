@@ -21,6 +21,11 @@ type Fetcher interface {
 	FetchAll(ctx context.Context, q githubclient.RepoQuery) (githubclient.RepoData, error)
 }
 
+// maxInFlight caps how many Repos one cycle fetches at once. GitHub's
+// secondary rate limit keys on concurrency, so an unbounded burst of every
+// Repo trips it long before the hourly budget runs low.
+const maxInFlight = 4
+
 // ClientFactory creates a Fetcher for a given token.
 type ClientFactory func(token string) Fetcher
 
@@ -200,10 +205,13 @@ func (p *Poller) fetch(ctx context.Context) state.Snapshot {
 	copy(previous, p.current)
 	p.mu.Unlock()
 
+	sem := make(chan struct{}, maxInFlight)
 	for i, repo := range enabled {
 		wg.Add(1)
 		go func(i int, repo config.Repo) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			// find previous state by owner/name since indices may shift
 			var prev state.RepoState
 			for _, p := range previous {
@@ -261,7 +269,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	}
 
 	stale := func(err error) state.RepoState {
-		now := time.Now()
+		now := p.now()
 		return state.RepoState{
 			Owner:     repo.Owner,
 			Name:      repo.Name,

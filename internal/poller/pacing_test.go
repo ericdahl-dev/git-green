@@ -2,6 +2,8 @@ package poller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -150,5 +152,46 @@ func TestSnapshotCarriesThrottles(t *testing.T) {
 	snap := p.fetch(context.Background())
 	if len(snap.Throttles) != 1 {
 		t.Errorf("snapshot carried %d throttles, want 1", len(snap.Throttles))
+	}
+}
+
+// peakFetcher records the most fetches it saw in flight at once.
+type peakFetcher struct {
+	mu            sync.Mutex
+	inFlight, max int
+}
+
+func (f *peakFetcher) FetchAll(_ context.Context, _ githubclient.RepoQuery) (githubclient.RepoData, error) {
+	f.mu.Lock()
+	f.inFlight++
+	f.max = max(f.max, f.inFlight)
+	f.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	f.mu.Lock()
+	f.inFlight--
+	f.mu.Unlock()
+	return githubclient.RepoData{ResolvedBranch: "main"}, nil
+}
+
+// A cycle must not burst every Repo at once: GitHub's secondary limit keys on
+// concurrency, not on the hourly budget.
+func TestFetchCapsConcurrency(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("[[orgs]]\nname = \"acme\"\ntoken = \"t\"\n")
+	for i := 0; i < 12; i++ {
+		fmt.Fprintf(&b, "[[repos]]\nowner = \"acme\"\nname = \"r%d\"\n", i)
+	}
+	f := &peakFetcher{}
+	p := New(writeConfig(t, b.String()), func(string) Fetcher { return f })
+
+	snap := p.fetch(context.Background())
+	if len(snap.Repos) != 12 {
+		t.Fatalf("fetched %d repos, want 12", len(snap.Repos))
+	}
+	if f.max > maxInFlight {
+		t.Errorf("%d fetches in flight at once, want at most %d", f.max, maxInFlight)
+	}
+	if f.max < 2 {
+		t.Errorf("fetches ran one at a time (%d); the cap should still allow some parallelism", f.max)
 	}
 }

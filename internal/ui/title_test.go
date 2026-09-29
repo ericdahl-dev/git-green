@@ -56,3 +56,16 @@ func TestThrottleNoticeEmptyWhenNothingThrottled(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestThrottleNoticeSaysWhenGitHubRefused(t *testing.T) {
+	reset := time.Date(2026, 8, 27, 15, 12, 0, 0, time.Local)
+	got := ThrottleNotice([]state.Throttle{{Orgs: []string{"ndlibrary"}, Limited: true, Reset: reset}})
+	for _, want := range []string{"ndlibrary", "rate limited", "15:12"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("got %q, want it to contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "% left") {
+		t.Errorf("a refused token has no budget to report: %q", got)
+	}
+}
