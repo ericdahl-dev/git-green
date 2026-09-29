@@ -165,6 +165,9 @@ interval   = max(configured, time to reset / affordable)
   so they are paced together; pacing them separately would spend it twice.
 - A healthy token is never held back: while there is budget to spare the
   formula lands below the configured interval, and the configured one wins.
+- **Rate limited**: when GitHub refuses a token anyway (a 403 with a reset,
+  or a secondary limit with retry-after), that token is held until the reset.
+  Its Repos go stale with the reason, unlike paced Repos, which just wait.
 
 When a token is paced below its configured interval, the title bar says so —
 which Org, how much budget is left, the pace, and when it recovers. Healthy

@@ -2,14 +2,9 @@ package poller
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/go-github/v72/github"
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	"github.com/ericdahl-dev/git-green/internal/config"
@@ -49,14 +44,9 @@ type Poller struct {
 	// expanded holds the "owner/name" of repos whose rows are open in the UI.
 	// Only those fetch per-run jobs and per-PR runs; see RepoQuery.Detail.
 	expanded map[string]bool
-	// paced tracks each token's REST budget and when it may next be polled.
-	// Keyed by token rather than by org because orgs sharing a token share a
-	// budget, and pacing them independently would spend it twice over.
-	paced map[string]*tokenPace
-	// rateLimitedUntil records, per org, when GitHub said the quota resets.
-	// Polling that org is skipped until then rather than spending every cycle
-	// collecting 403s.
-	rateLimitedUntil map[string]time.Time
+	// pacer paces each token against its REST budget and holds tokens
+	// GitHub has rate-limited until their reset.
+	pacer *ratelimit.Pacer
 	// now is swappable in tests so threshold crossings can be exercised
 	// without waiting on the wall clock.
 	now func() time.Time
@@ -74,17 +64,18 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 			Stoplight: aggregator.StoplightGrey,
 		}
 	}
-	return &Poller{
-		cfg:              cfg,
-		factory:          factory,
-		dispatcher:       webhooks.New(cfg.Webhooks),
-		current:          repos,
-		stuck:            make(map[string]*stuckEntry),
-		paced:            make(map[string]*tokenPace),
-		expanded:         make(map[string]bool),
-		rateLimitedUntil: make(map[string]time.Time),
-		now:              time.Now,
+	p := &Poller{
+		cfg:        cfg,
+		factory:    factory,
+		dispatcher: webhooks.New(cfg.Webhooks),
+		current:    repos,
+		stuck:      make(map[string]*stuckEntry),
+		expanded:   make(map[string]bool),
+		now:        time.Now,
 	}
+	// Read the clock through p.now so tests that swap it move pacing too.
+	p.pacer = ratelimit.NewPacer(func() time.Time { return p.now() })
+	return p
 }
 
 // SetExpandedRepos records which repo rows are open in the UI, as
@@ -105,166 +96,9 @@ func (p *Poller) isExpanded(owner, name string) bool {
 	return p.expanded[owner+"/"+name]
 }
 
-// rateLimitPause reports how long an org is still rate-limited for, and clears
-// the entry once it has elapsed.
-func (p *Poller) rateLimitPause(org string) (time.Duration, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	until, ok := p.rateLimitedUntil[org]
-	if !ok {
-		return 0, false
-	}
-	if remaining := until.Sub(p.now()); remaining > 0 {
-		return remaining, true
-	}
-	delete(p.rateLimitedUntil, org)
-	return 0, false
-}
-
-// noteRateLimit records a reset time reported by GitHub so subsequent polls
-// for that org back off instead of burning cycles on 403s.
-func (p *Poller) noteRateLimit(org string, err error) {
-	var rlErr *github.RateLimitError
-	var abuseErr *github.AbuseRateLimitError
-	var until time.Time
-	switch {
-	case errors.As(err, &rlErr):
-		until = rlErr.Rate.Reset.Time
-	case errors.As(err, &abuseErr):
-		if abuseErr.RetryAfter != nil {
-			until = p.now().Add(*abuseErr.RetryAfter)
-		}
-	default:
-		return
-	}
-	if until.IsZero() {
-		return
-	}
-	p.mu.Lock()
-	p.rateLimitedUntil[org] = until
-	p.mu.Unlock()
-	logx.Debug("rate limited", "org", org, "until", until)
-}
-
-// tokenPace is one token's budget and the pace it buys.
-type tokenPace struct {
-	budget   ratelimit.Budget
-	cost     int // REST calls one full cycle costs this token
-	interval time.Duration
-	nextDue  time.Time
-	orgs     map[string]bool
-}
-
-// fetchCost is what one repo's fetch spent, reported back so the cycle can be
-// priced per token.
-type fetchCost struct {
-	token   string
-	calls   int
-	budget  ratelimit.Budget
-	spent   bool // false when the repo was skipped or never reached the API
-	skipped bool
-}
-
-// due reports whether a token may be polled this cycle. An unpaced token — one
-// that has never reported a budget, or is comfortably inside it — is always due.
-func (p *Poller) due(token string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pace, ok := p.paced[token]
-	if !ok || pace.nextDue.IsZero() {
-		return true
-	}
-	return !p.now().Before(pace.nextDue)
-}
-
-// repriceTokens folds a cycle's spending into each token's pace. A token that
-// was skipped this cycle keeps the pace it already had.
-func (p *Poller) repriceTokens(costs []fetchCost) {
-	configured := time.Duration(p.cfg.Settings.PollInterval) * time.Second
-	now := p.now()
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, c := range costs {
-		if !c.spent || c.token == "" {
-			continue
-		}
-		pace, ok := p.paced[c.token]
-		if !ok {
-			pace = &tokenPace{orgs: make(map[string]bool)}
-			p.paced[c.token] = pace
-		}
-		pace.cost += c.calls
-		// Repos race, so take the leanest reading of the cycle: it is the one
-		// closest to what is actually left.
-		if c.budget.Known() && (!pace.budget.Known() || c.budget.Remaining < pace.budget.Remaining) {
-			pace.budget = c.budget
-		}
-	}
-
-	for token, pace := range p.paced {
-		if !anySpent(costs, token) {
-			continue
-		}
-		interval, throttled := ratelimit.Interval(configured, pace.budget, pace.cost, now)
-		pace.interval = interval
-		if throttled {
-			pace.nextDue = now.Add(interval)
-			logx.Debug("throttling token", "orgs", orgList(pace.orgs),
-				"remaining", pace.budget.Remaining, "cost", pace.cost, "interval", interval)
-		} else {
-			// Healthy tokens are never held back: the ticker alone decides
-			// when they poll, exactly as before pacing existed.
-			pace.nextDue = time.Time{}
-		}
-		// The cost is re-measured every cycle: expanding a repo changes it.
-		pace.cost = 0
-	}
-}
-
-func anySpent(costs []fetchCost, token string) bool {
-	for _, c := range costs {
-		if c.spent && c.token == token {
-			return true
-		}
-	}
-	return false
-}
-
-func orgList(orgs map[string]bool) []string {
-	out := make([]string, 0, len(orgs))
-	for o := range orgs {
-		out = append(out, o)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // Throttles reports every token currently polling slower than configured, for
-// the title bar. Healthy tokens are omitted — there is nothing to say.
-func (p *Poller) Throttles() []state.Throttle {
-	configured := time.Duration(p.cfg.Settings.PollInterval) * time.Second
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	var out []state.Throttle
-	for _, pace := range p.paced {
-		if pace.interval <= configured || !pace.budget.Known() {
-			continue
-		}
-		out = append(out, state.Throttle{
-			Orgs:      orgList(pace.orgs),
-			Remaining: pace.budget.Remaining,
-			Limit:     pace.budget.Limit,
-			Reset:     pace.budget.Reset,
-			Interval:  pace.interval,
-		})
-	}
-	sort.Slice(out, func(a, b int) bool {
-		return strings.Join(out[a].Orgs, ",") < strings.Join(out[b].Orgs, ",")
-	})
-	return out
-}
+// the title bar.
+func (p *Poller) Throttles() []state.Throttle { return p.pacer.Throttles() }
 
 // Snapshot returns an immutable view of the current (possibly initial) state.
 func (p *Poller) Snapshot() state.Snapshot {
@@ -322,8 +156,6 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 	copy(previous, p.current)
 	p.mu.Unlock()
 
-	costs := make([]fetchCost, len(enabled))
-
 	for i, repo := range enabled {
 		wg.Add(1)
 		go func(i int, repo config.Repo) {
@@ -339,17 +171,16 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 			// A token polling below the configured rate skips its repos this
 			// cycle. Their last-known state stands rather than going stale:
 			// nothing failed, the dashboard is just refreshing less often.
-			if token, err := p.cfg.TokenForOrg(repo.Owner); err == nil && !p.due(token) {
+			if p.pacedOut(repo.Owner) {
 				results[i] = prev
-				costs[i] = fetchCost{token: token, skipped: true}
 				return
 			}
-			results[i], costs[i] = p.fetchRepo(ctx, repo, prev)
+			results[i] = p.fetchRepo(ctx, repo, prev)
 		}(i, repo)
 	}
 
 	wg.Wait()
-	p.repriceTokens(costs)
+	p.pacer.EndCycle(time.Duration(p.cfg.Settings.PollInterval) * time.Second)
 
 	p.mu.Lock()
 	p.current = results
@@ -371,7 +202,19 @@ func (p *Poller) fetch(ctx context.Context, ch chan<- state.Snapshot) {
 	}
 }
 
-func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.RepoState) (state.RepoState, fetchCost) {
+// pacedOut reports whether an Org's token is being paced this cycle. A token
+// GitHub rate-limited is not paced out: its Repos still go through fetchRepo,
+// which marks them stale with the reason.
+func (p *Poller) pacedOut(org string) bool {
+	token, err := p.cfg.TokenForOrg(org)
+	if err != nil || p.pacer.Due(token) {
+		return false
+	}
+	_, limited := p.pacer.LimitedUntil(token)
+	return !limited
+}
+
+func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.RepoState) state.RepoState {
 	logx.Debug("fetch repo", "owner", repo.Owner, "name", repo.Name)
 	// Keep whatever branch was already resolved. Falling back to the config
 	// value (often empty) would throw the resolution away on every error and
@@ -382,8 +225,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		resolved = prev.Branch
 	}
 
-	var cost fetchCost
-	stale := func(err error) (state.RepoState, fetchCost) {
+	stale := func(err error) state.RepoState {
 		now := time.Now()
 		return state.RepoState{
 			Owner:     repo.Owner,
@@ -394,19 +236,16 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 			PRs:       prev.PRs,
 			StaleAt:   &now,
 			Err:       err,
-		}, cost
-	}
-
-	if pause, limited := p.rateLimitPause(repo.Owner); limited {
-		return stale(fmt.Errorf("rate limited for %s; retrying in %s", repo.Owner, pause.Round(time.Second)))
+		}
 	}
 
 	token, err := p.cfg.TokenForOrg(repo.Owner)
 	if err != nil {
 		return stale(err)
 	}
-	cost.token = token
-	p.noteTokenOrg(token, repo.Owner)
+	if until, limited := p.pacer.LimitedUntil(token); limited {
+		return stale(fmt.Errorf("rate limited for %s; retrying in %s", repo.Owner, until.Sub(p.now()).Round(time.Second)))
+	}
 
 	client := p.factory(token)
 	// Use the previously-resolved branch so we avoid a Repositories.Get call every poll.
@@ -419,9 +258,9 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 	}
 
 	data, err := client.FetchAll(ctx, q)
-	cost.calls, cost.budget, cost.spent = data.Calls, data.Budget, true
+	p.pacer.Observe(token, repo.Owner, data.Calls, data.Budget)
 	if err != nil {
-		p.noteRateLimit(repo.Owner, err)
+		p.pacer.Failed(token, err)
 		return stale(err)
 	}
 
@@ -452,20 +291,7 @@ func (p *Poller) fetchRepo(ctx context.Context, repo config.Repo, prev state.Rep
 		PRs:       prStates,
 		StaleAt:   nil,
 		Err:       nil,
-	}, cost
-}
-
-// noteTokenOrg remembers which orgs ride on a token, so a throttle notice can
-// name them.
-func (p *Poller) noteTokenOrg(token, org string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pace, ok := p.paced[token]
-	if !ok {
-		pace = &tokenPace{orgs: make(map[string]bool)}
-		p.paced[token] = pace
 	}
-	pace.orgs[org] = true
 }
 
 // stuckKey identifies one stuck condition: a repo's default branch, or one of
