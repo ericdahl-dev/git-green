@@ -264,20 +264,20 @@ func TestExpansionSurvivesReordering(t *testing.T) {
 	red := state.RepoState{Owner: "o", Name: "red", Stoplight: aggregator.StoplightRed}
 
 	d := NewDashboard(state.New([]state.RepoState{green, red}))
-	d.repoExp["o/red"] = true
+	d.tree.expanded[repoKey("o/red")] = true
 
 	if got := d.ExpandedRepos(); len(got) != 1 || got[0] != "o/red" {
 		t.Fatalf("ExpandedRepos = %v, want [o/red]", got)
 	}
 
 	// Reverse the order, as a stoplight change would.
-	d.snapshot = state.New([]state.RepoState{red, green})
-	d.rows = d.buildRows()
+	d.tree.snapshot = state.New([]state.RepoState{red, green})
+	d.tree.build()
 
-	if !d.repoExp["o/red"] {
+	if got := d.ExpandedRepos(); len(got) != 1 || got[0] != "o/red" {
 		t.Error("o/red lost its expansion after reordering")
 	}
-	if d.repoExp["o/green"] {
+	if d.tree.expanded[repoKey("o/green")] {
 		t.Error("o/green became expanded after reordering")
 	}
 }
