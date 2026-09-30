@@ -8,6 +8,7 @@ A terminal dashboard that shows live GitHub CI status across multiple repos, upd
 _Avoid_: project, service
 
 **Workflow**: The primary display unit. A named CI workflow within a Repo (e.g. `CI`, `Deploy`). Shows the status of its latest Run.
+GitHub's built-in CodeQL scanning (its default setup) counts as a Workflow named `CodeQL`, since it is often a Repo's only one. Its other built-ins — Dependabot's update jobs and Copilot's PR reviews — are not CI and are never shown.
 _Avoid_: pipeline, action
 
 **Run**: A single execution of a Workflow, triggered by a push, PR, or manual dispatch. Has a status (queued, in_progress, success, failure, cancelled).

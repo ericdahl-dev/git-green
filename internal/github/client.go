@@ -114,11 +114,29 @@ type RepoQuery struct {
 	Detail bool
 }
 
-// dependabotEvent is the event GitHub assigns to the runs Dependabot generates
-// for its own update jobs. Those runs are named after the update
-// ("npm_and_yarn in /. for axios, ...") rather than after a workflow, so they
-// never collapse in a name-keyed dedupe and can swamp a repo's branch section.
-const dependabotEvent = "dynamic"
+// dynamicEvent is the event GitHub assigns to runs of its built-in workflows:
+// Dependabot's update jobs, Copilot's PR reviews and CodeQL's default setup.
+// Only CodeQL is CI signal, and it is often a repo's only workflow. Dependabot
+// names each run after the update ("npm_and_yarn in /. for axios, ...") and
+// can swamp a repo's branch section, so it and Copilot stay hidden.
+const dynamicEvent = "dynamic"
+
+// codeQLPath is the workflow path prefix of CodeQL's default setup.
+const codeQLPath = "dynamic/github-code-scanning/"
+
+func isCodeQL(run *github.WorkflowRun) bool {
+	return run.GetEvent() == dynamicEvent && strings.HasPrefix(run.GetPath(), codeQLPath)
+}
+
+// workflowName is the name a run's Workflow row shows. CodeQL names each run
+// after its trigger ("Push on main", "PR #121", "Scheduled"), so it is shown
+// by its workflow name instead.
+func workflowName(run *github.WorkflowRun) string {
+	if isCodeQL(run) {
+		return "CodeQL"
+	}
+	return run.GetName()
+}
 
 func newFilterSet(workflows []string) map[string]bool {
 	set := make(map[string]bool, len(workflows))
@@ -138,14 +156,14 @@ func runKey(run *github.WorkflowRun) string {
 	return "name:" + run.GetName()
 }
 
-// keepRun reports whether a run belongs in the dashboard: Dependabot's own
-// update runs are dropped, and when the query names workflows only those are
-// kept.
+// keepRun reports whether a run belongs in the dashboard: GitHub's built-in
+// runs other than CodeQL are dropped, and when the query names workflows only
+// those are kept.
 func keepRun(run *github.WorkflowRun, filterSet map[string]bool) bool {
-	if run.GetEvent() == dependabotEvent {
+	if run.GetEvent() == dynamicEvent && !isCodeQL(run) {
 		return false
 	}
-	if len(filterSet) > 0 && !filterSet[run.GetName()] {
+	if len(filterSet) > 0 && !filterSet[workflowName(run)] {
 		return false
 	}
 	return true
@@ -289,7 +307,7 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery, stats *fetchS
 		seen[key] = true
 
 		wr := WorkflowRun{
-			WorkflowName: run.GetName(),
+			WorkflowName: workflowName(run),
 			Status:       run.GetStatus(),
 			Conclusion:   run.GetConclusion(),
 			HTMLURL:      run.GetHTMLURL(),
@@ -344,7 +362,7 @@ func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string, s
 		}
 		seen[key] = true
 		results = append(results, WorkflowRun{
-			WorkflowName: run.GetName(),
+			WorkflowName: workflowName(run),
 			Status:       run.GetStatus(),
 			Conclusion:   run.GetConclusion(),
 			HTMLURL:      run.GetHTMLURL(),

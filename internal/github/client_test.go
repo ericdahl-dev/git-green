@@ -28,6 +28,47 @@ func TestKeepRunDropsDependabotUpdates(t *testing.T) {
 	}
 }
 
+func dynamicRun(name, path string) *github.WorkflowRun {
+	r := run(name, "dynamic", 7)
+	r.Path = github.Ptr(path)
+	return r
+}
+
+// GitHub's built-in workflows all run with event "dynamic". CodeQL is real CI
+// signal and is often a repo's only workflow; Dependabot's update runs and
+// Copilot's PR reviews are not.
+func TestKeepRunKeepsCodeQLButNotOtherBuiltIns(t *testing.T) {
+	cases := []struct {
+		run  *github.WorkflowRun
+		keep bool
+	}{
+		{dynamicRun("Push on main", "dynamic/github-code-scanning/codeql"), true},
+		{dynamicRun("PR #121", "dynamic/github-code-scanning/codeql"), true},
+		{dynamicRun("npm_and_yarn in /. for axios", "dynamic/dependabot/dependabot-updates"), false},
+		{dynamicRun("Copilot code review", "dynamic/copilot-pull-request-reviewer/copilot-pull-request-reviewer"), false},
+	}
+	for _, tc := range cases {
+		if got := keepRun(tc.run, nil); got != tc.keep {
+			t.Errorf("%s (%s): keep = %v, want %v", tc.run.GetName(), tc.run.GetPath(), got, tc.keep)
+		}
+	}
+}
+
+// CodeQL names each run after its trigger, so the Workflow row needs a stable
+// name, and the workflows filter matches on it.
+func TestCodeQLRunsAreNamedCodeQL(t *testing.T) {
+	r := dynamicRun("Scheduled", "dynamic/github-code-scanning/codeql")
+	if got := workflowName(r); got != "CodeQL" {
+		t.Errorf("workflowName = %q, want CodeQL", got)
+	}
+	if got := workflowName(run("CI", "push", 1)); got != "CI" {
+		t.Errorf("workflowName = %q, want CI", got)
+	}
+	if !keepRun(r, newFilterSet([]string{"CodeQL"})) {
+		t.Error("a workflows filter naming CodeQL must keep its runs")
+	}
+}
+
 func TestKeepRunHonoursWorkflowFilter(t *testing.T) {
 	filter := newFilterSet([]string{"CI"})
 	if !keepRun(run("CI", "push", 1), filter) {
