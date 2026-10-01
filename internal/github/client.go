@@ -194,12 +194,14 @@ func New(token string) *Client {
 //   - 1 call to list open PRs
 //
 // Expanded (q.Detail true) adds the detail the dashboard actually renders:
-//   - 1 call per branch workflow run to fetch jobs
 //   - 1 call per PR for its runs (filtered by head SHA)
-//   - 1 GraphQL call for stack membership, when 2+ PRs are open
+//   - 1 call per workflow run, on the branch and on each PR, to fetch jobs
+//   - 1 GraphQL call for stack membership and review state, when a PR is open
 //
-// A repo with 4 workflows and 11 open PRs therefore costs 2 calls collapsed
-// and 17 REST plus 1 GraphQL expanded. No ListWorkflows call in either case.
+// A repo with 4 workflows, each also running on 11 open PRs, therefore costs
+// 2 calls collapsed and 2+4+11+44 = 61 REST plus 1 GraphQL expanded. The ETag
+// cache makes every one of those that is unchanged since the last cycle free,
+// so a quiet expanded repo costs close to nothing. No ListWorkflows call.
 func (c *Client) FetchAll(ctx context.Context, q RepoQuery) (RepoData, error) {
 	var stats fetchStats
 
@@ -317,17 +319,8 @@ func (c *Client) fetchBranchRuns(ctx context.Context, q RepoQuery, stats *fetchS
 		// Jobs are only rendered under an expanded repo row, and cost one call
 		// per run, so they are fetched only when that detail is on screen.
 		if q.Detail {
-			jobs, jobsResp, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, run.GetID(), &github.ListWorkflowJobsOptions{})
-			stats.observe(jobsResp)
-			if err != nil {
-				return nil, "", fmt.Errorf("listing jobs for run %d in %s/%s: %w", run.GetID(), q.Owner, q.Name, err)
-			}
-			for _, j := range jobs.Jobs {
-				wr.Jobs = append(wr.Jobs, Job{
-					Name:       j.GetName(),
-					Status:     j.GetStatus(),
-					Conclusion: j.GetConclusion(),
-				})
+			if wr.Jobs, err = c.fetchJobs(ctx, q, run.GetID(), stats); err != nil {
+				return nil, "", err
 			}
 		}
 		results = append(results, wr)
@@ -361,15 +354,35 @@ func (c *Client) fetchRunsForRef(ctx context.Context, q RepoQuery, sha string, s
 			continue
 		}
 		seen[key] = true
+		jobs, err := c.fetchJobs(ctx, q, run.GetID(), stats)
+		if err != nil {
+			return nil, err
+		}
 		results = append(results, WorkflowRun{
 			WorkflowName: workflowName(run),
 			Status:       run.GetStatus(),
 			Conclusion:   run.GetConclusion(),
 			HTMLURL:      run.GetHTMLURL(),
 			RunID:        run.GetID(),
+			Jobs:         jobs,
 		})
 	}
 	return results, nil
+}
+
+// fetchJobs returns a run's jobs: one call per run, which the ETag cache makes
+// free while the run is unchanged. Only called for expanded repos.
+func (c *Client) fetchJobs(ctx context.Context, q RepoQuery, runID int64, stats *fetchStats) ([]Job, error) {
+	jobs, resp, err := c.gh.Actions.ListWorkflowJobs(ctx, q.Owner, q.Name, runID, &github.ListWorkflowJobsOptions{})
+	stats.observe(resp)
+	if err != nil {
+		return nil, fmt.Errorf("listing jobs for run %d in %s/%s: %w", runID, q.Owner, q.Name, err)
+	}
+	out := make([]Job, 0, len(jobs.Jobs))
+	for _, j := range jobs.Jobs {
+		out = append(out, Job{Name: j.GetName(), Status: j.GetStatus(), Conclusion: j.GetConclusion()})
+	}
+	return out, nil
 }
 
 // noFailedJobsFragment is what GitHub says when rerun-failed-jobs has nothing

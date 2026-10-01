@@ -114,7 +114,7 @@ The Dashboard renders a two-level expandable tree:
 - **Repo row**: expand/collapse with `enter`/`space`. When expanded shows Branch section, then Stack rows and standalone PR rows. A Repo opens on its own when its CI starts running or failing (its branch Stoplight, or any PR it has loaded, goes 🟡 or 🔴) and closes again when it goes quiet, so a calm dashboard sits collapsed. This only fires when that state changes, so a Repo the user opened or closed by hand stays that way until its CI moves. Collapsed Repos do not fetch PR runs, so PR-only activity on a collapsed Repo does not open it.
 - **Branch section**: non-navigable; always rendered above PR rows when a Repo is expanded.
 - **Stack row**: navigable; expand/collapse with `enter`/`space` to show its member PR rows. Its Stoplight is the most actionable of its members', and `f` and `o` act on the first failing member so a collapsed Stack still exposes what broke.
-- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs. A PR inside a Stack renders one level deeper and carries its `position/size`. A Review glyph follows the PR number when there is a Review signal.
+- **PR row**: navigable; expand/collapse with `enter`/`space` to show that PR's Workflow runs and each one's Jobs. A PR inside a Stack renders one level deeper and carries its `position/size`. A Review glyph follows the PR number when there is a Review signal.
 
 Expansion and the cursor stay attached to what a row shows — the Repo by name, a Stack or PR by its number — so they survive PRs opening and closing, config reloads and active-first re-sorting.
 
@@ -130,7 +130,7 @@ Each poll cycle makes the following API calls per enabled Repo:
 - 1 × `PullRequests.List`
 - 1 × GraphQL query for Stack membership and Review status, only for an expanded Repo with 1+ open PRs. A host that rejects the Stack fields gets one Review-only retry. A failure here costs only the grouping and Review glyphs — PRs still render.
 - 1 × `ListRepositoryWorkflowRuns` per open PR (head SHA runs)
-- 1 × `ListWorkflowJobs` per branch Workflow Run
+- 1 × `ListWorkflowJobs` per Workflow Run, on the branch and on each PR, so an expanded PR row lists its Jobs the way GitHub's checks do
 
 Every GET is a conditional request: the Poller keeps one client per token for
 the life of the app, and each remembers the ETag of the last response per URL.
