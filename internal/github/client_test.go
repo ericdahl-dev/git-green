@@ -198,8 +198,8 @@ func TestFetchAllCollapsedCostsTwoCalls(t *testing.T) {
 	}
 }
 
-// Expanding the same repo pays for the detail it now renders: one job call per
-// deduped run, one runs call per open PR.
+// Expanding the same repo pays for the detail it now renders: one runs call per
+// open PR, and one job call per deduped run, on the branch and on every PR.
 func TestFetchAllExpandedFetchesDetail(t *testing.T) {
 	var paths []string
 	c := countingServer(t, &paths)
@@ -208,9 +208,9 @@ func TestFetchAllExpandedFetchesDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// 1 branch runs + 2 job calls + 1 PR list + 3 PR run calls.
-	if len(paths) != 7 {
-		t.Fatalf("expanded poll made %d calls (%v), want 7", len(paths), paths)
+	// 1 branch runs + 2 job calls + 1 PR list + 3 PRs × (1 runs + 2 job calls).
+	if len(paths) != 13 {
+		t.Fatalf("expanded poll made %d calls (%v), want 13", len(paths), paths)
 	}
 	jobCalls := 0
 	for _, p := range paths {
@@ -218,12 +218,19 @@ func TestFetchAllExpandedFetchesDetail(t *testing.T) {
 			jobCalls++
 		}
 	}
-	if jobCalls != 2 {
-		t.Errorf("job calls = %d, want one per branch run (2)", jobCalls)
+	if jobCalls != 8 {
+		t.Errorf("job calls = %d, want one per run: 2 branch + 3 PRs × 2 (8)", jobCalls)
 	}
 	for _, r := range data.BranchRuns {
 		if len(r.Jobs) == 0 {
 			t.Errorf("expanded run %q has no jobs", r.WorkflowName)
+		}
+	}
+	for _, pr := range data.PRRuns {
+		for _, r := range pr.Runs {
+			if len(r.Jobs) == 0 {
+				t.Errorf("PR #%d run %q has no jobs", pr.PR.Number, r.WorkflowName)
+			}
 		}
 	}
 }
