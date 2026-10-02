@@ -78,7 +78,7 @@ func TestPacerHoldsARateLimitedTokenUntilReset(t *testing.T) {
 	p, c := newTestPacer()
 	reset := c.t.Add(30 * time.Minute)
 	if !p.Failed("tok", &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: reset}}}) {
-		t.Fatal("a RateLimitError must be recognised")
+		t.Fatal("a RateLimitError must be recognized")
 	}
 
 	if p.Due("tok") {
@@ -97,7 +97,7 @@ func TestPacerHoldsARateLimitedTokenUntilReset(t *testing.T) {
 	}
 }
 
-func TestPacerHonoursRetryAfter(t *testing.T) {
+func TestPacerHonorsRetryAfter(t *testing.T) {
 	p, c := newTestPacer()
 	wait := 90 * time.Second
 	p.Failed("tok", &github.AbuseRateLimitError{RetryAfter: &wait})
@@ -121,7 +121,7 @@ func TestPacerIgnoresOtherErrors(t *testing.T) {
 func TestPacerBacksOffASecondaryLimitWithoutRetryAfter(t *testing.T) {
 	p, c := newTestPacer()
 	if !p.Failed("tok", &github.AbuseRateLimitError{}) {
-		t.Fatal("a secondary limit must be recognised even without Retry-After")
+		t.Fatal("a secondary limit must be recognized even without Retry-After")
 	}
 	if until, ok := p.LimitedUntil("tok"); !ok || !until.Equal(c.t.Add(SecondaryBackoff)) {
 		t.Errorf("LimitedUntil = %v, %v; want %v", until, ok, c.t.Add(SecondaryBackoff))

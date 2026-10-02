@@ -29,7 +29,7 @@ func TitleLine(fetching bool, spinView string, throttles []state.Throttle) strin
 	return line + "\n"
 }
 
-// ThrottleNotice summarises why polling has slowed, or "" while every token is
+// ThrottleNotice summarizes why polling has slowed, or "" while every token is
 // healthy. It names the budget, the pace it bought, and when it recovers, so a
 // slow dashboard reads as throttled rather than broken.
 func ThrottleNotice(throttles []state.Throttle) string {

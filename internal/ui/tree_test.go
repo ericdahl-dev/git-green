@@ -27,7 +27,7 @@ func selectKind(t *testing.T, tr *tree, kind rowKind, num int) {
 }
 
 // PR expansion follows the PR, not its position: when a PR above it closes,
-// the expanded one stays expanded and its neighbour does not open.
+// the expanded one stays expanded and its neighbor does not open.
 func TestTreePRExpansionFollowsThePR(t *testing.T) {
 	tr := newTree(state.New([]state.RepoState{
 		treeRepo("a", aggregator.StoplightGreen, lonePR(1, aggregator.StoplightGreen), lonePR(2, aggregator.StoplightGreen)),
