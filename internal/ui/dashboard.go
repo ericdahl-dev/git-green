@@ -77,7 +77,7 @@ type Dashboard struct {
 }
 
 // WithRerunner returns a copy of the dashboard wired to re-run failed runs
-// through r. Re-runs fire against ctx so they are cancelled when the app exits.
+// through r. Re-runs fire against ctx so they are canceled when the app exits.
 func (d Dashboard) WithRerunner(ctx context.Context, r Rerunner) Dashboard {
 	d.rerunCtx = ctx
 	d.rerunner = r

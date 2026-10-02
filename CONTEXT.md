@@ -11,7 +11,7 @@ _Avoid_: project, service
 GitHub's built-in CodeQL scanning (its default setup) counts as a Workflow named `CodeQL`, since it is often a Repo's only one. Its other built-ins — Dependabot's update jobs and Copilot's PR reviews — are not CI and are never shown.
 _Avoid_: pipeline, action
 
-**Run**: A single execution of a Workflow, triggered by a push, PR, or manual dispatch. Has a status (queued, in_progress, success, failure, cancelled).
+**Run**: A single execution of a Workflow, triggered by a push, PR, or manual dispatch. Has a status (queued, in_progress, success, failure, cancelled). <!-- spelling: ok: GitHub API status values -->
 _Avoid_: build, execution
 
 **Job**: A named unit of work within a Run. Drill-down target below Workflow.
@@ -19,8 +19,8 @@ _Avoid_: step (Step is a lower-level concept within a Job)
 
 **Step**: The lowest-level unit within a Job. Not a primary display target.
 
-**Org**: A GitHub organisation. Token configuration is scoped to Org, not Repo.
-_Avoid_: organisation, account
+**Org**: A GitHub organization. Token configuration is scoped to Org, not Repo.
+_Avoid_: organization, account
 
 **PR**: An open GitHub Pull Request within a Repo. The dashboard shows each open PR as an expandable row with its own Stoplight, derived from Workflow Runs on that PR's head SHA.
 _Avoid_: pull request (use PR), change, diff
@@ -64,7 +64,7 @@ The visual health indicator for a Repo or PR. Aggregates across all Workflows us
 | 🟢 Green | Healthy | `success`, `neutral`, `skipped` |
 | 🔴 Red | Broken or blocked | `failure`, `timed_out`, `action_required`, `startup_failure` |
 | 🟡 Yellow | In progress | `queued`, `in_progress`, `requested`, `waiting`, `pending` |
-| ⚪ Grey | No signal | `cancelled`, no runs yet |
+| ⚪ Gray | No signal | `cancelled`, no runs yet <!-- spelling: ok: GitHub API conclusion value --> |
 
 A Run's effective status is its conclusion once it has one, and its status until then. This one table drives the Stoplight, the Run and Job icons, which Runs `f` can re-run (a finished 🔴 Run), and stuck alerts (🔴 is a prolonged failure, 🟡 is prolonged in progress).
 
@@ -258,5 +258,5 @@ _Avoid_: fix, retry
 ## Flagged ambiguities
 
 - "monitor" — resolved: means live dashboard display, not notification/alerting
-- "detail view" — resolved: removed in favour of inline expand/collapse tree on the Dashboard
+- "detail view" — resolved: removed in favor of inline expand/collapse tree on the Dashboard
 - "enabled/disabled" — resolved: `enabled = false` in config suppresses all API calls for that Repo; the Repo manager toggles this at runtime

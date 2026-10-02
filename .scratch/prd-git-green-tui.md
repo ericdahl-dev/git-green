@@ -10,7 +10,7 @@ Developers working across multiple GitHub repositories have no fast, at-a-glance
 
 ## Solution
 
-A terminal dashboard (TUI) that displays live GitHub CI status for a user-configured set of repos. Each repo is represented as a single stoplight row — green, red, yellow, or grey — aggregated across all its workflows. Users can drill into a repo to see individual workflow jobs, force a refresh, or open a run in the browser, all without leaving the terminal. Data is fetched by polling the GitHub API every 15 seconds (configurable).
+A terminal dashboard (TUI) that displays live GitHub CI status for a user-configured set of repos. Each repo is represented as a single stoplight row — green, red, yellow, or gray — aggregated across all its workflows. Users can drill into a repo to see individual workflow jobs, force a refresh, or open a run in the browser, all without leaving the terminal. Data is fetched by polling the GitHub API every 15 seconds (configurable).
 
 ## User Stories
 
@@ -19,7 +19,7 @@ A terminal dashboard (TUI) that displays live GitHub CI status for a user-config
 3. As a developer, I want a red stoplight when any workflow in a repo is failing or timed out, so that I immediately know something needs attention.
 4. As a developer, I want a yellow stoplight when a workflow is queued or running, so that I know work is in progress.
 5. As a developer, I want a green stoplight when all workflows succeed, so that I can confidently move on.
-6. As a developer, I want a grey stoplight when a run is cancelled or no runs exist yet, so that the dashboard doesn't misrepresent ambiguous states as failures.
+6. As a developer, I want a gray stoplight when a run is canceled or no runs exist yet, so that the dashboard doesn't misrepresent ambiguous states as failures.
 7. As a developer, I want to navigate repos with arrow keys and select one with enter, so that I can explore details without touching the mouse.
 8. As a developer, I want to expand a repo row inline to see its branch CI and each open PR with its own stoplight, so that I can assess the full state without leaving the dashboard.
 9. As a developer, I want to press `o` to open the current run in the browser, so that I can read full logs when needed.
@@ -48,7 +48,7 @@ A terminal dashboard (TUI) that displays live GitHub CI status for a user-config
 
 - **Poller** — Owns the polling ticker. On each tick, calls the GitHub client for every configured Repo concurrently, collects results, and publishes a new State snapshot. On client error, retains the last known result for that Repo and sets a staleness timestamp.
 
-- **Aggregator** — Pure function: maps a slice of GitHub run statuses → a Stoplight color using worst-case aggregation across Workflows. Status mapping: `success`/`neutral`/`skipped` → green; `failure`/`timed_out`/`action_required` → red; `queued`/`in_progress` → yellow; `cancelled`/no runs → grey.
+- **Aggregator** — Pure function: maps a slice of GitHub run statuses → a Stoplight color using worst-case aggregation across Workflows. Status mapping: `success`/`neutral`/`skipped` → green; `failure`/`timed_out`/`action_required` → red; `queued`/`in_progress` → yellow; `cancelled`/no runs → gray. <!-- spelling: ok: `cancelled` is the GitHub API conclusion value -->
 
 - **State / Model** — Immutable snapshot of all Repo statuses (Stoplight, latest Run, Jobs, staleness). The Poller produces a new State on every poll tick; the UI renders from the current State.
 
@@ -87,11 +87,11 @@ name = "git-green"
 
 ## Testing Decisions
 
-- **What makes a good test:** Test external behaviour through the module's public interface, not implementation details. A good test describes a scenario ("given a run with status `failure`, the Aggregator returns red") rather than asserting on internal state or private functions.
+- **What makes a good test:** Test external behavior through the module's public interface, not implementation details. A good test describes a scenario ("given a run with status `failure`, the Aggregator returns red") rather than asserting on internal state or private functions.
 
-- **Config** — Test parsing of valid TOML, validation errors (missing required fields, invalid poll interval), token resolution (explicit token, env var reference, missing env var), and defaulting behaviour (no branch → nil, no workflows → nil).
+- **Config** — Test parsing of valid TOML, validation errors (missing required fields, invalid poll interval), token resolution (explicit token, env var reference, missing env var), and defaulting behavior (no branch → nil, no workflows → nil).
 
-- **Aggregator** — Test every status → Stoplight mapping, worst-case aggregation across multiple workflows, and edge cases (no runs, all cancelled, mixed green/yellow).
+- **Aggregator** — Test every status → Stoplight mapping, worst-case aggregation across multiple workflows, and edge cases (no runs, all canceled, mixed green/yellow).
 
 - **State / Model** — Test that a new State snapshot correctly reflects updated Repo data from the Poller, staleness is set on error and cleared on success, and immutability (new snapshot doesn't mutate previous).
 

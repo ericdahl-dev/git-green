@@ -23,10 +23,10 @@ func TestAutoExpandOpensActiveAndFailingRepos(t *testing.T) {
 		repoState("green", aggregator.StoplightGreen),
 		repoState("running", aggregator.StoplightYellow),
 		repoState("failing", aggregator.StoplightRed),
-		repoState("idle", aggregator.StoplightGrey),
+		repoState("idle", aggregator.StoplightGray),
 	}))
 	if isOpen(d, "green") || isOpen(d, "idle") {
-		t.Error("green/grey repos should stay collapsed")
+		t.Error("green/gray repos should stay collapsed")
 	}
 	if !isOpen(d, "running") || !isOpen(d, "failing") {
 		t.Error("yellow/red repos should open")

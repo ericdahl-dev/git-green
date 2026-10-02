@@ -14,7 +14,7 @@ var (
 	jobFaint  = lipgloss.NewStyle().Faint(true)
 )
 
-// runIcon marks a Run or Job by its effective status, in its Stoplight colour.
+// runIcon marks a Run or Job by its effective status, in its Stoplight color.
 func runIcon(status string) string {
 	switch aggregator.Of(status) {
 	case aggregator.StoplightGreen:

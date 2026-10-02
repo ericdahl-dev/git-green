@@ -62,7 +62,7 @@ Usage:
 
 // runCommand handles the non-TUI invocations. It reports whether args were
 // handled here, along with the exit code to use when they were. Anything it
-// does not recognise falls through to launching the dashboard.
+// does not recognize falls through to launching the dashboard.
 func runCommand(args []string, out io.Writer) (int, bool) {
 	if len(args) == 0 {
 		return 0, false
