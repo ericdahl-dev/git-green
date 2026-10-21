@@ -12,6 +12,7 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 - **PR-level CI tree** — expand any repo to see branch CI and each open PR with its own stoplight
 - **Stacked PRs grouped** — PRs in a `gh stack` stack collapse into one row that shows the stack number, its health, and each member in merge order
 - **Active-first sorting** — in-progress and failing repos/PRs bubble to the top automatically
+- **Sort toggle** — press `s` to cycle repos between active-first, name (A→Z) and open PRs (most first)
 - **Inline expand/collapse** — navigate with `↑`/`↓`, toggle any row with `enter`/`space`
 - **Auto-expand** — a repo opens on its own when its CI starts running or failing and closes when it goes green again; a row you toggle by hand stays put until its status changes
 - **Auto-polling** — refreshes every 15 seconds (configurable); retains last-known status on API errors
@@ -150,6 +151,7 @@ raw body and sent as `X-Git-Green-Signature: sha256=<hex>`.
 | `↑` / `k` | Navigate up |
 | `↓` / `j` | Navigate down |
 | `enter` / `space` | Expand / collapse repo, stack, or PR row |
+| `s` | Cycle repo sort: active-first → name (A→Z) → open PRs (most first) |
 | `f` | Re-run the failed run on the selected row (`enter` confirms, `esc` cancels) |
 | `r` | Force refresh |
 | `o` | Open run in browser |

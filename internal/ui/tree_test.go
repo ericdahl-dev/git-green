@@ -112,3 +112,33 @@ func TestTreeEmpty(t *testing.T) {
 	tr.move(1)
 	tr.move(-1)
 }
+
+// s cycles the Repo order: active-first, then name A→Z, then most open PRs
+// (ties A→Z), then back. The cursor stays on its Repo throughout.
+func TestTreeCycleSort(t *testing.T) {
+	pr := lonePR(1, aggregator.StoplightGreen)
+	tr := newTree(state.New([]state.RepoState{
+		treeRepo("c", aggregator.StoplightGreen, pr),
+		treeRepo("B", aggregator.StoplightGreen, pr, pr),
+		treeRepo("a", aggregator.StoplightRed),
+		treeRepo("d", aggregator.StoplightGreen, pr),
+	}))
+	order := func() string {
+		out := ""
+		for _, n := range tr.rows {
+			out += n.repo.Name
+		}
+		return out
+	}
+	selectKind(t, &tr, kindRepo, 0) // cursor on the first row, "a"
+
+	for _, want := range []string{"acBd", "aBcd", "Bcda", "acBd"} {
+		if got := order(); got != want {
+			t.Fatalf("mode %s: order %q, want %q", tr.sortBy, got, want)
+		}
+		if n, _ := tr.selected(); n.repo.Name != "a" {
+			t.Fatalf("mode %s: cursor on %q, want a", tr.sortBy, n.repo.Name)
+		}
+		tr.cycleSort()
+	}
+}

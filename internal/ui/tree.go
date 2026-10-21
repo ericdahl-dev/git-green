@@ -2,6 +2,7 @@ package ui
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/ericdahl-dev/git-green/internal/aggregator"
 	githubclient "github.com/ericdahl-dev/git-green/internal/github"
@@ -63,6 +64,31 @@ type tree struct {
 	attention map[string]bool // last seen needsAttention per Repo, for auto-expand
 	rows      []node
 	cursor    int
+	sortBy    sortMode
+}
+
+// sortMode orders the Repo rows. PRs and Stacks inside a Repo always sort
+// active-first.
+type sortMode int
+
+const (
+	sortActiveFirst sortMode = iota
+	sortName                 // A→Z
+	sortOpenPRs              // most open PRs first, ties A→Z
+)
+
+func (m sortMode) String() string {
+	return [...]string{"active", "name", "open PRs"}[m]
+}
+
+// cycleSort moves to the next sort mode, keeping the cursor on its row.
+func (t *tree) cycleSort() {
+	sel, ok := t.selectedKey()
+	t.sortBy = (t.sortBy + 1) % 3
+	t.build()
+	if ok {
+		t.restore(sel)
+	}
 }
 
 func newTree(snap state.Snapshot) tree {
@@ -138,7 +164,18 @@ func (t *tree) build() {
 	repos := make([]state.RepoState, len(t.snapshot.Repos))
 	copy(repos, t.snapshot.Repos)
 	sort.SliceStable(repos, func(a, b int) bool {
-		return repos[a].Stoplight.ActiveFirst() < repos[b].Stoplight.ActiveFirst()
+		ra, rb := repos[a], repos[b]
+		switch t.sortBy {
+		case sortOpenPRs:
+			if len(ra.PRs) != len(rb.PRs) {
+				return len(ra.PRs) > len(rb.PRs)
+			}
+			fallthrough
+		case sortName:
+			return strings.ToLower(ra.FullName()) < strings.ToLower(rb.FullName())
+		default:
+			return ra.Stoplight.ActiveFirst() < rb.Stoplight.ActiveFirst()
+		}
 	})
 
 	// A fresh slice, not t.rows[:0]: Bubble Tea copies the model by value, and

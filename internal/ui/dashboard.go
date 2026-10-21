@@ -151,6 +151,8 @@ func (d Dashboard) Update(msg tea.Msg) (Dashboard, tea.Cmd) {
 			if d.tree.toggle() {
 				return d, tea.Batch(selectionTimeoutCmd(), expandedChangedCmd(d.ExpandedRepos()))
 			}
+		case "s":
+			d.tree.cycleSort()
 		case "f":
 			// Only a row whose run actually failed can be re-run.
 			if target := d.selectedRerunTarget(); target != nil && d.rerunner != nil {
@@ -345,7 +347,7 @@ func (d Dashboard) hintLine() string {
 		}
 		return successStyle.Render(d.rerunMsg)
 	default:
-		return hintStyle.Render("↑/↓ navigate  enter/space expand  f re-run  o open  r refresh  m manage  q quit  ? help")
+		return hintStyle.Render("↑/↓ navigate  enter/space expand  s sort: " + d.tree.sortBy.String() + "  f re-run  o open  r refresh  m manage  q quit  ? help")
 	}
 }
 
