@@ -69,7 +69,7 @@ func TestCodeQLRunsAreNamedCodeQL(t *testing.T) {
 	}
 }
 
-func TestKeepRunHonoursWorkflowFilter(t *testing.T) {
+func TestKeepRunHonorsWorkflowFilter(t *testing.T) {
 	filter := newFilterSet([]string{"CI"})
 	if !keepRun(run("CI", "push", 1), filter) {
 		t.Error("expected CI to be kept")

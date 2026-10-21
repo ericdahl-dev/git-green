@@ -36,7 +36,7 @@ type Options struct {
 	Poller    Poller
 	Initial   state.Snapshot        // shown until the first poll lands
 	Snapshots <-chan state.Snapshot // one per poll cycle; closed on stop
-	// Ctx bounds re-runs, so they are cancelled when the app exits.
+	// Ctx bounds re-runs, so they are canceled when the app exits.
 	Ctx context.Context
 	// Stop shuts the Poller down on quit.
 	Stop func()

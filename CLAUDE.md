@@ -26,7 +26,7 @@ Go + Bubble Tea (ADR 0001).
 ## Workflow
 
 - Branch off `main`, open a PR, squash-merge. Commit messages follow Conventional Commits and PRs close their issue (`Closes #N`).
-- Keep `CONTEXT.md` in sync when behaviour or domain language changes.
+- Keep `CONTEXT.md` in sync when behavior or domain language changes.
 
 ## Agent skills
 

@@ -152,7 +152,7 @@ func TestRunsStuckReasonFollowsStoplight(t *testing.T) {
 		{githubclient.WorkflowRun{Status: "in_progress"}, true, "prolonged_in_progress"},
 		{githubclient.WorkflowRun{Status: "queued"}, true, "prolonged_in_progress"},
 		{githubclient.WorkflowRun{Status: "completed", Conclusion: "success"}, false, ""},
-		{githubclient.WorkflowRun{Status: "completed", Conclusion: "cancelled"}, false, ""},
+		{githubclient.WorkflowRun{Status: "completed", Conclusion: "cancelled"}, false, ""}, // spelling: ok: GitHub API conclusion value
 	}
 	for _, tc := range cases {
 		stuck, reason := runsStuckReason([]githubclient.WorkflowRun{tc.run})

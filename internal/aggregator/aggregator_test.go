@@ -21,9 +21,9 @@ func TestOfMapsEveryStatus(t *testing.T) {
 		"requested":       StoplightYellow,
 		"waiting":         StoplightYellow,
 		"pending":         StoplightYellow,
-		"cancelled":       StoplightGrey,
-		"stale":           StoplightGrey,
-		"":                StoplightGrey,
+		"cancelled":       StoplightGray, // spelling: ok: GitHub API conclusion value
+		"stale":           StoplightGray,
+		"":                StoplightGray,
 	}
 	for status, want := range cases {
 		if got := Of(status); got != want {
@@ -42,8 +42,8 @@ func TestRunsIsWorstCase(t *testing.T) {
 		runs []githubclient.WorkflowRun
 		want Stoplight
 	}{
-		{"no runs", nil, StoplightGrey},
-		{"all cancelled", []githubclient.WorkflowRun{run("completed", "cancelled"), run("completed", "cancelled")}, StoplightGrey},
+		{"no runs", nil, StoplightGray},
+		{"all canceled", []githubclient.WorkflowRun{run("completed", "cancelled"), run("completed", "cancelled")}, StoplightGray}, // spelling: ok: GitHub API conclusion value
 		{"green and running", []githubclient.WorkflowRun{run("completed", "success"), run("in_progress", "")}, StoplightYellow},
 		{"red beats everything", []githubclient.WorkflowRun{run("completed", "success"), run("in_progress", ""), run("completed", "failure")}, StoplightRed},
 		{"red beats queued", []githubclient.WorkflowRun{run("queued", ""), run("completed", "timed_out")}, StoplightRed},
@@ -66,9 +66,9 @@ func TestRunsReadsConclusionBeforeStatus(t *testing.T) {
 }
 
 func TestActiveFirstOrder(t *testing.T) {
-	lights := []Stoplight{StoplightGrey, StoplightGreen, StoplightRed, StoplightYellow}
+	lights := []Stoplight{StoplightGray, StoplightGreen, StoplightRed, StoplightYellow}
 	sort.Slice(lights, func(a, b int) bool { return lights[a].ActiveFirst() < lights[b].ActiveFirst() })
-	want := []Stoplight{StoplightYellow, StoplightRed, StoplightGreen, StoplightGrey}
+	want := []Stoplight{StoplightYellow, StoplightRed, StoplightGreen, StoplightGray}
 	for i := range want {
 		if lights[i] != want[i] {
 			t.Fatalf("got %v, want %v", lights, want)

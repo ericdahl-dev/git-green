@@ -44,7 +44,7 @@ func TestThrottleNoticeTrimsLongOrgLists(t *testing.T) {
 		Interval:  time.Hour,
 	}})
 	if !strings.Contains(got, "+2") {
-		t.Errorf("got %q, want the extra orgs summarised as +2", got)
+		t.Errorf("got %q, want the extra orgs summarized as +2", got)
 	}
 	if strings.Contains(got, "d") && strings.Contains(got, "c") {
 		t.Errorf("got %q, want only the first two orgs named", got)

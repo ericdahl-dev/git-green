@@ -1,5 +1,5 @@
 // Package aggregator is the one place that interprets a Run's GitHub status.
-// Everything that colours, sorts, re-runs or alerts on a Run asks it, rather
+// Everything that colors, sorts, re-runs or alerts on a Run asks it, rather
 // than reading status strings itself.
 package aggregator
 
@@ -9,7 +9,7 @@ import githubclient "github.com/ericdahl-dev/git-green/internal/github"
 type Stoplight int
 
 const (
-	StoplightGrey   Stoplight = iota // no runs, or all cancelled
+	StoplightGray   Stoplight = iota // no runs, or all canceled
 	StoplightGreen                   // all passing
 	StoplightYellow                  // in progress
 	StoplightRed                     // failing or blocked
@@ -54,14 +54,14 @@ func Of(status string) Stoplight {
 	case "queued", "in_progress", "requested", "waiting", "pending":
 		return StoplightYellow
 	default:
-		return StoplightGrey
+		return StoplightGray
 	}
 }
 
 // Runs returns the worst-case Stoplight across runs: Red > Yellow > Green >
-// Grey. No runs is Grey.
+// Gray. No runs is Gray.
 func Runs(runs []githubclient.WorkflowRun) Stoplight {
-	result := StoplightGrey
+	result := StoplightGray
 	for _, r := range runs {
 		if light := Of(r.Effective()); light > result {
 			result = light

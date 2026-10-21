@@ -66,7 +66,7 @@ func New(cfg *config.Config, factory ClientFactory) *Poller {
 			Owner:     r.Owner,
 			Name:      r.Name,
 			Branch:    r.Branch,
-			Stoplight: aggregator.StoplightGrey,
+			Stoplight: aggregator.StoplightGray,
 		}
 	}
 	cfg = cfg.Clone()
@@ -114,7 +114,7 @@ func (p *Poller) Snapshot() state.Snapshot {
 	return state.New(p.current)
 }
 
-// Start runs the fetch loop until ctx is cancelled or the returned cancel is
+// Start runs the fetch loop until ctx is canceled or the returned cancel is
 // called, sending a Snapshot after every cycle. The loop is the only fetcher
 // and the only sender, so cycles never overlap and the channel closes only
 // once nothing can send on it.
