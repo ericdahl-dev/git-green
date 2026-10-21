@@ -89,6 +89,8 @@ _Avoid_: approval status, review badge
 
 Repos, Stacks, and PRs are sorted by Stoplight priority so the most actionable items appear at the top: 🟡 in-progress → 🔴 failing → 🟢 passing → ⚪ no signal. Order is stable within each tier.
 
+Active-first is the default Repo order. Pressing `s` cycles the Repo order through active-first → name (A→Z, case-insensitive) → open PRs (most first, ties A→Z) and back. The choice lasts for the session and only reorders Repos; PRs and Stacks inside a Repo stay active-first.
+
 **Stacks are the exception.** Members of a Stack always render bottom-to-top, in the order they have to merge, because reordering them by Stoplight would hide that order. The Stack as a whole still sorts active-first against other Stacks and standalone PRs.
 _Avoid_: bubbling, floating
 
