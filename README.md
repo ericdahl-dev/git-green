@@ -27,17 +27,19 @@ A terminal dashboard for live GitHub CI health across multiple repos — no brow
 ### Homebrew
 
 ```bash
-brew install ericdahl-dev/tap/git-green
+brew install --cask ericdahl-dev/tap/git-green
 ```
 
-As of v0.2.0, git-green is published as a Homebrew **cask** rather than a formula — GoReleaser removed the formula config this project used. New installs need no change. If you installed before v0.2.0 you are on the old formula, which is frozen and no longer receives updates; move across once with:
+As of v0.2.0, git-green is published as a Homebrew **cask** rather than a formula — GoReleaser removed the formula config this project used. The tap still holds the old formula under the same name, frozen at v0.1.3, and a plain `brew install ericdahl-dev/tap/git-green` picks the formula over the cask, so pass `--cask`. If you installed before v0.2.0 you are on the old formula; move across once with:
 
 ```bash
-brew uninstall git-green
+brew uninstall --formula git-green
 brew install --cask ericdahl-dev/tap/git-green
 ```
 
 ### Go
+
+Requires Go 1.25 or later.
 
 ```bash
 go install github.com/ericdahl-dev/git-green@latest
@@ -94,7 +96,7 @@ owner = "Skeyelab"
 name = "your-repo"
 ```
 
-To use an explicit token for a specific account, add an `[[orgs]]` entry:
+To use an explicit token for a specific account, add an `[[orgs]]` entry. If both are set, `token` wins over `token_env`; an entry with neither also uses `gh auth token`. A `token_env` that names an empty or unset variable stops git-green at startup with an error.
 
 ```toml
 [[orgs]]
@@ -156,7 +158,7 @@ raw body and sent as `X-Git-Green-Signature: sha256=<hex>`.
 | `r` | Force refresh |
 | `o` | Open run in browser |
 | `m` | Open repo manager |
-| `q` | Quit |
+| `q` / `ctrl+c` | Quit |
 | `?` | Toggle help overlay |
 | `esc` | Close help overlay |
 
@@ -174,7 +176,7 @@ gets a 403 and the error is shown in the footer.
 | `t` / `space` | Toggle enable / disable |
 | `a` | Add repo |
 | `e` | Edit repo |
-| `d` | Delete repo |
+| `d` | Delete repo (`y` confirms, any other key cancels) |
 | `esc` | Back to dashboard |
 
 The add/edit form takes `owner/name` or a pasted GitHub URL (`https://github.com/owner/name`, `git@github.com:owner/name.git`, or any page inside the repo such as `/pull/42`). `git-green init` accepts the same.
